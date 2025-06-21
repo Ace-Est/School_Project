@@ -21,7 +21,7 @@ data_df["Datetime"] = pd.to_datetime(data_df["Time"] + " " + data_df["Hour"].ast
 
 # ========== 3. 預處理天氣資料 ==========
 weather_df["hr"] = weather_df["hr"].astype(int)
-weather_df["Date"] = pd.to_datetime(weather_df["Date"], format="%Y/%m/%d")
+weather_df["Date"] = pd.to_datetime(weather_df["Date"], format="%Y-%m-%d")
 weather_df.loc[weather_df["hr"] == 24, "Date"] += pd.Timedelta(days=1)
 weather_df.loc[weather_df["hr"] == 24, "hr"] = 0
 weather_df["Datetime"] = pd.to_datetime(weather_df["Date"].dt.date.astype(str) + " " + weather_df["hr"].astype(str) + ":00")
