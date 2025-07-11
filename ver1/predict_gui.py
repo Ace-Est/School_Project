@@ -12,7 +12,7 @@ plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft JhengHei', 'Si
 plt.rcParams['axes.unicode_minus'] = False
 
 # 載入資料
-df = pd.read_csv('hourly_aggregated.csv')
+df = pd.read_csv('merged_hourly.csv')
 df['Date'] = pd.to_datetime(df['Date'])
 df['weekday'] = df['Date'].dt.weekday
 df['rain_percent'] = df['Rain']
