@@ -1,15 +1,23 @@
 import pandas as pd
 
-# 讀取兩個 CSV
-data_df = pd.read_csv("data.csv")
-label_df = pd.read_csv("date_label.csv")
+# 1. 讀取 CSV 檔案
+df = pd.read_csv('merged_hourly.csv')
+date_label = pd.read_csv('date_label.csv')
 
-# 先確保兩邊的時間格式一致（這是關鍵）
-data_df['Time'] = pd.to_datetime(data_df['Time'])
-label_df['Time'] = pd.to_datetime(label_df['Time'])
+# 2. 時間格式轉換
+df['Time'] = pd.to_datetime(df['Time'])
+date_label['Time'] = pd.to_datetime(date_label['Time'])
 
-# 使用 merge 合併資料（依照 Time 欄位）
-merged_df = pd.merge(data_df, label_df, on='Time', how='left')
+# 3. 刪除原本的 label_x 和 label_y（如果有）
+df = df.drop(columns=['label'], errors='ignore')  # 先刪掉舊的
+df = df.merge(date_label, on='Time', how='left')
 
-# 將結果儲存
-merged_df.to_csv("merged.csv", index=False)
+# 4. 合併每日 label
+df['label'] = df['label'].fillna(0).astype(int)
+
+
+# 6. 儲存為 CSV（其餘欄位保留原格式）
+df.to_csv('merged_hourly.csv', index=False)
+
+# 7. 顯示前幾筆結果
+print(df.head())

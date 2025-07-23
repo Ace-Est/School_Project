@@ -3,7 +3,7 @@ import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_percentage_error
 
-def train_and_save_model(csv_path='merged_hourly.csv', model_path='xgb_model.json'):
+def train_and_save_model(csv_path='hourly_aggregated.csv', model_path='xgb_model.json'):
     df = pd.read_csv(csv_path)
     df['Date'] = pd.to_datetime(df['Date'])
 

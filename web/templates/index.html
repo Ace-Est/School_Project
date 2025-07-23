@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>智慧能源監控平台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .tab-content { margin-top: 30px; }
+        .chart-container { min-height: 400px; }
+        .upload-area { 
+            border: 2px dashed #ccc; 
+            border-radius: 8px; 
+            padding: 40px; 
+            text-align: center; 
+            margin: 20px 0;
+            transition: border-color 0.3s;
+        }
+        .upload-area:hover { border-color: #007bff; }
+        .upload-area.dragover { border-color: #007bff; background-color: #f8f9fa; }
+        .results-table { margin-top: 20px; }
+        .download-btn { margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div class="container py-4">
+    <h1 class="mb-4">智慧能源監控平台</h1>
+    <div class="alert alert-info">
+        <ul>
+            <li>本系統預測三條線：<b style='color:red'>耗電量 (use)</b>、<b style='color:green'>發電量 (pv)</b>、<b style='color:orange'>淨負載 (kpt = use - pv)</b>。</li>
+            <li>發電量 (pv) 僅用天氣與小時預測，夜間自動為 0。</li>
+            <li>上傳資料只需天氣、時間等特徵，不需有 kpt、pv、use 欄位。</li>
+            <li>所有預測均經過對應 AI 模型 (xgb_use.json, xgb_pv.json)。</li>
+        </ul>
+    </div>
+    <ul class="nav nav-tabs" id="mainTab" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="kpt-tab" data-bs-toggle="tab" data-bs-target="#kpt" type="button" role="tab">用電預測</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button" role="tab">歷史查詢</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="battery-tab" data-bs-toggle="tab" data-bs-target="#battery" type="button" role="tab">蓄電池管理</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload" type="button" role="tab">資料上傳預測</button>
+        </li>
+    </ul>
+    <div class="tab-content" id="mainTabContent">
+        <div class="tab-pane fade show active" id="kpt" role="tabpanel">
+            <div class="chart-container">
+                <canvas id="latestKptChart"></canvas>
+            </div>
+        </div>
+        <div class="tab-pane fade" id="history" role="tabpanel">
+            <div class="mb-3">
+                <label for="history-date-picker" class="form-label">選擇日期：</label>
+                <input type="date" id="history-date-picker" class="form-control" style="max-width:200px;display:inline-block;">
+                <button class="btn btn-primary ms-2" id="history-query-btn">查詢</button>
+            </div>
+            <div class="chart-container">
+                <canvas id="historyKptChart"></canvas>
+            </div>
+            <div id="bill-summary" class="mt-4">
+                <h5>用電計費（分時段）</h5>
+                <table class="table table-bordered w-auto">
+                    <thead>
+                        <tr>
+                            <th>時段</th>
+                            <th>用電度數 (kWh)</th>
+                            <th>電費金額 (元)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>尖峰</td>
+                            <td id="peak-kwh">-</td>
+                            <td id="peak-fee">-</td>
+                        </tr>
+                        <tr>
+                            <td>半尖峰</td>
+                            <td id="halfpeak-kwh">-</td>
+                            <td id="halfpeak-fee">-</td>
+                        </tr>
+                        <tr>
+                            <td>離峰</td>
+                            <td id="offpeak-kwh">-</td>
+                            <td id="offpeak-fee">-</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="tab-pane fade" id="battery" role="tabpanel">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>蓄電池狀態</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label class="form-label">當前電量：</label>
+                                <div class="progress mb-2">
+                                    <div id="battery-level" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                                </div>
+                                <small class="text-muted">
+                                    <span id="battery-current">0</span> / 1260 kWh
+                                </small>
+                            </div>
+                            <div class="mb-3">
+                                <label for="battery-start-date" class="form-label">開始日期：</label>
+                                <input type="date" id="battery-start-date" class="form-control" style="max-width:200px;display:inline-block;">
+                            </div>
+                            <div class="mb-3">
+                                <label for="battery-end-date" class="form-label">結束日期：</label>
+                                <input type="date" id="battery-end-date" class="form-control" style="max-width:200px;display:inline-block;">
+                                <button class="btn btn-primary ms-2" id="battery-query-btn">分析時間區間</button>
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="alert" style="background-color: #d1ecf1; border-color: #bee5eb;">
+                                    <strong class="text-dark">初始電量：</strong> <span class="text-dark">0度（系統自動設定）</span>
+                                </div>
+                            </div>
+                            <div class="alert" style="background-color: #d1ecf1; border-color: #bee5eb;">
+                                <h6 class="text-dark">蓄電池規格：</h6>
+                                <ul class="mb-0 text-dark">
+                                    <li>總容量：1260 kWh</li>
+                                    <li>安全範圍：126 - 1134 kWh (10% - 90%)</li>
+                                    <li>最大充電功率：200 kWh/小時</li>
+                                    <li>最大放電功率：200 kWh/小時</li>
+                                    <li>充電效率：100%（充電無損耗）</li>
+                                    <li>放電效率：90%（10%放電損耗）</li>
+                                    <li>自放電損耗：0.03%/小時</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>省錢方案分析</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="battery-analysis">
+                                <p class="text-muted">請選擇日期進行分析</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="row mt-4">
+                <div class="col-12">
+                    <!-- 圖表導航控制 -->
+                    <div class="mb-3">
+                        <div class="btn-group" role="group">
+                            <button class="btn btn-outline-secondary" id="prev-day-btn" disabled>前一天</button>
+                            <button class="btn btn-outline-secondary" id="next-day-btn" disabled>後一天</button>
+                            <button class="btn btn-outline-primary" id="overview-btn" disabled>總體視圖</button>
+                        </div>
+                        <span class="ms-3" id="current-day-display">請先分析時間區間</span>
+                    </div>
+                    <div class="chart-container" style="min-height: 400px;">
+                        <canvas id="batteryChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="row mt-3">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>詳細分析結果</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="battery-details">
+                                <p class="text-muted">請選擇日期查看詳細分析</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="tab-pane fade" id="upload" role="tabpanel">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5>上傳資料檔案</h5>
+                    <div class="upload-area" id="upload-area">
+                        <div class="mb-3">
+                            <i class="fas fa-cloud-upload-alt" style="font-size: 3rem; color: #ccc;"></i>
+                        </div>
+                        <p class="text-muted">拖拽 CSV 檔案到此處或點擊選擇檔案</p>
+                        <input type="file" id="file-input" accept=".csv" style="display: none;">
+                        <button class="btn btn-outline-primary" onclick="document.getElementById('file-input').click()">
+                            選擇檔案
+                        </button>
+                    </div>
+                    <div class="mb-3">
+                        <h6>檔案格式要求：</h6>
+                        <ul class="text-muted">
+                            <li>CSV 格式檔案</li>
+                            <li>必要欄位：Date, Temperature, Humidity, Rain, Hour</li>
+                            <li>可選欄位：day_week（若無會自動計算）、kpt（僅供對照，不影響預測）、label（若無則自動設預設值）</li>
+                            <li>不需上傳 pv/use 欄位，系統會自動預測</li>
+                        </ul>
+                    </div>
+                    <div class="mb-3">
+                        <button class="btn btn-primary" id="upload-btn" disabled>開始預測</button>
+                        <div id="upload-status" class="mt-2"></div>
+                    </div>
+                    
+                    <!-- 日曆選擇器 -->
+                    <div class="mt-4">
+                        <h6>選擇查看日期</h6>
+                        <div class="row">
+                            <div class="col-md-8">
+                                <label for="upload-date-picker" class="form-label">日期：</label>
+                                <input type="date" id="upload-date-picker" class="form-control">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">&nbsp;</label>
+                                <button class="btn btn-outline-primary d-block w-100" id="change-date-btn" disabled>切換日期</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <h5>預測結果</h5>
+                    <div id="upload-results">
+                        <p class="text-muted">請先上傳檔案進行預測</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 圖表區域 -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <div class="chart-container">
+                        <canvas id="uploadKptChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 預測結果表格 -->
+            <div class="row mt-3">
+                <div class="col-12">
+                    <div id="upload-results-table" class="results-table" style="display: none;">
+                        <h6>預測結果</h6>
+                        <div class="table-responsive">
+                            <table class="table table-striped table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>日期</th>
+                                        <th>小時</th>
+                                        <th>預測 use</th>
+                                        <th>預測 pv</th>
+                                        <th>預測 kpt</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="results-tbody">
+                                </tbody>
+                            </table>
+                        </div>
+                        <button class="btn btn-success download-btn" id="download-csv-btn">下載預測結果 (CSV)</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://kit.fontawesome.com/a076d05399.js"></script>
+<script>
+// 全域變數
+let latestKptChart = null;
+let historyKptChart = null;
+let uploadKptChart = null;
+let batteryChart = null;
+let uploadedFile = null;
+let predictionResults = null;
+let allPredictionResults = null; // 保存所有上傳的數據
+let dateRangeData = null; // 保存日期範圍數據
+let currentDayIndex = 0; // 當前顯示的日期索引
+
+// 動態調整 Y 軸範圍的函數
+function getAdjustedYAxis(dataArrays) {
+    const allData = dataArrays.flat();
+    const minVal = Math.min(...allData);
+    const maxVal = Math.max(...allData);
+    
+    // 預設範圍
+    let yMin = -100;
+    let yMax = 800;
+    
+    // 如果數據超出範圍，則調整
+    if (minVal < -100) {
+        yMin = Math.floor(minVal / 100) * 100 - 100;
+    }
+    if (maxVal > 800) {
+        yMax = Math.ceil(maxVal / 100) * 100 + 100;
+    }
+    
+    return { min: yMin, max: yMax };
+}
+
+// 用電預測圖表
+function renderLatestKptChart(hours, use_pred, kpt_pred, pv_pred) {
+    if (latestKptChart) latestKptChart.destroy();
+    const ctx = document.getElementById('latestKptChart').getContext('2d');
+    
+    // 動態調整 Y 軸範圍
+    const yAxis = getAdjustedYAxis([use_pred, kpt_pred, pv_pred]);
+    
+    latestKptChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: hours,
+            datasets: [
+                {
+                    label: '預測耗電量 (use)',
+                    data: use_pred,
+                    borderColor: 'red',
+                    fill: false
+                },
+                {
+                    label: '預測發電量 (pv)',
+                    data: pv_pred,
+                    borderColor: 'green',
+                    fill: false
+                },
+                {
+                    label: '預測 kpt',
+                    data: kpt_pred,
+                    borderColor: 'orange',
+                    fill: false
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: true } },
+            scales: {
+                x: { title: { display: true, text: 'Hour' } },
+                y: {
+                    title: { display: true, text: 'kWh' },
+                    min: yAxis.min,
+                    max: yAxis.max,
+                    ticks: { stepSize: 100 }
+                }
+            }
+        }
+    });
+}
+// 歷史查詢圖表
+function renderHistoryKptChart(hours, actual_use, actual_kpt, actual_pv, use_pred, kpt_pred, pv_pred) {
+    if (historyKptChart) historyKptChart.destroy();
+    const ctx = document.getElementById('historyKptChart').getContext('2d');
+    
+    // 動態調整 Y 軸範圍
+    const yAxis = getAdjustedYAxis([actual_use, actual_kpt, actual_pv, use_pred, kpt_pred, pv_pred]);
+    
+    historyKptChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: hours,
+            datasets: [
+                {
+                    label: '實際耗電量 (use)',
+                    data: actual_use,
+                    borderColor: 'red',
+                    borderDash: [5, 5],
+                    fill: false
+                },
+                {
+                    label: '實際發電量 (pv)',
+                    data: actual_pv,
+                    borderColor: 'green',
+                    borderDash: [5, 5],
+                    fill: false
+                },
+                {
+                    label: '實際 kpt',
+                    data: actual_kpt,
+                    borderColor: 'orange',
+                    borderDash: [5, 5],
+                    fill: false
+                },
+                {
+                    label: '預測耗電量 (use)',
+                    data: use_pred,
+                    borderColor: 'red',
+                    fill: false
+                },
+                {
+                    label: '預測發電量 (pv)',
+                    data: pv_pred,
+                    borderColor: 'green',
+                    fill: false
+                },
+                {
+                    label: '預測 kpt',
+                    data: kpt_pred,
+                    borderColor: 'orange',
+                    fill: false
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: true } },
+            scales: {
+                x: { title: { display: true, text: 'Hour' } },
+                y: {
+                    title: { display: true, text: 'kWh' },
+                    min: yAxis.min,
+                    max: yAxis.max,
+                    ticks: { stepSize: 100 }
+                }
+            }
+        }
+    });
+}
+
+// 蓄電池分析函數 - 支持日期範圍
+function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, initialBatteryLevel = 0) {
+    // 分析當天電價時段分布
+    const dailyRates = analyzeDailyRates(dateStr);
+    const batteryCapacity = 1260; // 總容量
+    const maxChargeRate = 200; // 最大充電功率
+    const maxDischargeRate = 200; // 最大放電功率
+    const dischargeEfficiency = 0.9; // 放電效率
+    const selfDischargeRate = 0.0003; // 自放電損耗 0.03%
+    
+    let batteryLevel = initialBatteryLevel; // 使用傳入的初始電量
+    const batteryLevels = [batteryLevel];
+    const chargeAmounts = [];
+    const dischargeAmounts = [];
+    const selfDischargeAmounts = [];
+    const gridUsage = [];
+    const savings = [];
+    
+    // 計算各時段電價
+    const rates = hours.map(hour => {
+        const date = new Date(dateStr);
+        date.setHours(hour);
+        return getElectricityRate(date, hour);
+    });
+    
+    // 分析每個小時的蓄電池策略
+    for (let i = 0; i < hours.length; i++) {
+        const hour = hours[i];
+        const kpt = kpt_pred[i];
+        const rate = rates[i];
+        
+        let chargeAmount = 0;
+        let dischargeAmount = 0;
+        let gridUsageAmount = kpt;
+        let hourSavings = 0;
+        
+        // 智能蓄電池策略 - 保持安全範圍 + 自放電損耗
+        const minBatteryLevel = batteryCapacity * 0.1; // 最低保持10%
+        const maxBatteryLevel = batteryCapacity * 0.9; // 最高不超過90%
+        
+        // 計算自放電損耗（每小時5%）
+        const selfDischarge = batteryLevel * selfDischargeRate;
+        batteryLevel = Math.max(0, batteryLevel - selfDischarge); // 確保不會變成負數
+        selfDischargeAmounts.push(selfDischarge);
+        
+        // 檢查是否為假日（週六、週日）
+        const isWeekendDay = isWeekend(dateStr);
+        
+        // 智能蓄電池策略 - 優先保留給尖峰時段
+        if (rate <= 1.8 && batteryLevel < maxBatteryLevel) {
+            // 離峰時段（1.58元）：充電到90%，為尖峰時段做準備
+            const targetLevel = batteryCapacity * 0.9;
+            if (batteryLevel < targetLevel) {
+                const neededCharge = targetLevel - batteryLevel;
+                chargeAmount = Math.min(neededCharge, maxChargeRate);
+                batteryLevel += chargeAmount;
+                gridUsageAmount = kpt + chargeAmount;
+            }
+        } else if (rate >= 5.0 && batteryLevel > 0) {
+            // 尖峰時段（5.8元）：優先使用蓄電池，最大化節省
+            const neededDischarge = Math.min(kpt, batteryLevel);
+            const actualDischarge = Math.min(maxDischargeRate, neededDischarge);
+            const effectiveDischarge = actualDischarge * dischargeEfficiency;
+            
+            if (actualDischarge <= batteryLevel) {
+                dischargeAmount = effectiveDischarge;
+                batteryLevel -= actualDischarge;
+                gridUsageAmount = kpt - effectiveDischarge;
+                hourSavings = effectiveDischarge * rate;
+            }
+        } else if (rate >= 3.0 && rate < 4.0 && batteryLevel > batteryCapacity * 0.5) {
+            // 半尖峰時段（3.63元）：只有在蓄電池電量超過50%時才放電
+            // 保留電量給尖峰時段使用
+            const neededDischarge = Math.min(kpt, batteryLevel * 0.3); // 最多使用30%的電量
+            const actualDischarge = Math.min(maxDischargeRate, neededDischarge);
+            const effectiveDischarge = actualDischarge * dischargeEfficiency;
+            
+            if (actualDischarge <= batteryLevel) {
+                dischargeAmount = effectiveDischarge;
+                batteryLevel -= actualDischarge;
+                gridUsageAmount = kpt - effectiveDischarge;
+                hourSavings = effectiveDischarge * rate;
+            }
+        }
+        
+        // 最後一天的最後一小時：清空蓄電池，不留電
+        if (isLastDay && i === hours.length - 1 && batteryLevel > 0) {
+            // 強制清空所有剩餘電量
+            const finalActualDischarge = batteryLevel;
+            const finalEffectiveDischarge = finalActualDischarge * dischargeEfficiency;
+            
+            dischargeAmount += finalEffectiveDischarge;
+            batteryLevel = 0; // 完全清空
+            gridUsageAmount = kpt - finalEffectiveDischarge;
+            hourSavings += finalEffectiveDischarge * rate;
+        }
+        
+        batteryLevels.push(batteryLevel);
+        chargeAmounts.push(chargeAmount);
+        dischargeAmounts.push(dischargeAmount);
+        gridUsage.push(gridUsageAmount);
+        savings.push(hourSavings);
+    }
+    
+    // 計算總節省金額
+    const totalSavings = savings.reduce((sum, val) => sum + val, 0);
+    const totalGridUsage = gridUsage.reduce((sum, val) => sum + val, 0);
+    const originalCost = kpt_pred.reduce((sum, val, i) => sum + val * rates[i], 0);
+    const newCost = gridUsage.reduce((sum, val, i) => sum + val * rates[i], 0);
+    const netSavings = originalCost - newCost;
+    
+    // 分析各時段節省效果
+    const peakSavings = savings.reduce((sum, val, i) => {
+        return rates[i] >= 5.0 ? sum + val : sum;
+    }, 0);
+    const halfPeakSavings = savings.reduce((sum, val, i) => {
+        return rates[i] >= 3.0 && rates[i] < 4.0 ? sum + val : sum;
+    }, 0);
+    const offPeakSavings = savings.reduce((sum, val, i) => sum + val, 0);
+    
+    // 計算新的統計項目
+    const totalPurchasePower = chargeAmounts.reduce((sum, val) => sum + val, 0); // 總購電量
+    const batteryElectricityCost = totalPurchasePower * 1.58; // 蓄電池電費（以離峰電價計算）
+    const totalLoss = selfDischargeAmounts.reduce((sum, val) => sum + val, 0); // 總損耗
+    const totalSavingsAmount = savings.reduce((sum, val) => sum + val, 0); // 節約金額
+    
+    // 計算實際放電量（考慮效率）
+    const totalEffectiveDischarge = dischargeAmounts.reduce((sum, val) => sum + val, 0); // 有效放電量
+    const totalBatteryDischarge = totalEffectiveDischarge / dischargeEfficiency; // 實際從蓄電池放出的電量
+    
+    // 計算剩餘電量（如果沒有完全清空）
+    const remainingBatteryLevel = batteryLevel;
+    
+    return {
+        batteryLevels: batteryLevels.slice(0, -1), // 移除最後一個值
+        chargeAmounts,
+        dischargeAmounts,
+        selfDischargeAmounts,
+        gridUsage,
+        savings,
+        totalSavings,
+        totalGridUsage,
+        originalCost,
+        newCost,
+        netSavings,
+        peakSavings,
+        halfPeakSavings,
+        offPeakSavings,
+        totalPurchasePower,
+        batteryElectricityCost,
+        totalLoss,
+        totalSavingsAmount,
+        totalEffectiveDischarge, // 有效放電量
+        totalBatteryDischarge, // 實際從蓄電池放出的電量
+        remainingBatteryLevel, // 剩餘電量
+        dailyRates, // 當天電價時段分析
+        finalBatteryLevel: batteryLevel
+    };
+}
+
+// 檢查是否為假日
+function isWeekend(dateStr) {
+    const date = new Date(dateStr);
+    return date.getDay() === 0 || date.getDay() === 6; // 0=週日, 6=週六
+}
+
+// 分析當天電價時段分布
+function analyzeDailyRates(dateStr) {
+    const rates = [];
+    const rateTypes = [];
+    
+    for (let hour = 0; hour < 24; hour++) {
+        const date = new Date(dateStr);
+        date.setHours(hour);
+        const rate = getElectricityRate(date, hour);
+        rates.push(rate);
+        
+        if (rate >= 5.0) {
+            rateTypes.push({ hour, rate, type: '尖峰', color: 'red' });
+        } else if (rate >= 3.0 && rate < 4.0) {
+            rateTypes.push({ hour, rate, type: '半尖峰', color: 'orange' });
+        } else {
+            rateTypes.push({ hour, rate, type: '離峰', color: 'green' });
+        }
+    }
+    
+    return {
+        rates,
+        rateTypes,
+        peakHours: rateTypes.filter(r => r.type === '尖峰').map(r => r.hour),
+        halfPeakHours: rateTypes.filter(r => r.type === '半尖峰').map(r => r.hour),
+        offPeakHours: rateTypes.filter(r => r.type === '離峰').map(r => r.hour)
+    };
+}
+
+// 取得電價函數
+function getElectricityRate(date, hour) {
+    function isSummer(date) {
+        const m = date.getMonth() + 1;
+        const d = date.getDate();
+        if (m > 5 && m < 10) return true;
+        if (m === 5 && d >= 16) return true;
+        if (m === 10 && d <= 15) return true;
+        return false;
+    }
+    
+    function getTimeType(date, hour) {
+        const wd = date.getDay(); // 0=Sun, 6=Sat
+        const summer = isSummer(date);
+        if (wd >= 1 && wd <= 5) { // 平日
+            if (summer) {
+                if (hour >= 16 && hour < 22) return 5.8;
+                if ((hour >= 9 && hour < 16) || (hour >= 22 && hour < 24)) return 3.63;
+                return 1.58;
+            } else {
+                if ((hour >= 6 && hour < 11) || (hour >= 14 && hour < 24)) return 3.4;
+                return 1.45;
+            }
+        } else if (wd === 6) { // 週六
+            if (summer) {
+                if (hour >= 9 && hour < 24) return 1.78;
+                return 1.58;
+            } else {
+                if ((hour >= 6 && hour < 11) || (hour >= 14 && hour < 24)) return 1.65;
+                return 1.45;
+            }
+        } else { // 週日
+            if (summer) return 1.58;
+            return 1.45;
+        }
+    }
+    
+    return getTimeType(date, hour);
+}
+
+// 渲染蓄電池圖表
+function renderBatteryChart(hours, kpt_pred, batteryData) {
+    try {
+        if (batteryChart) batteryChart.destroy();
+        const ctx = document.getElementById('batteryChart').getContext('2d');
+        
+        // 動態調整 Y 軸範圍
+        const yAxis = getAdjustedYAxis([kpt_pred, batteryData.batteryLevels]);
+        
+        // 判斷是否為單日顯示
+        const isSingleDay = hours.length <= 24;
+        const xAxisTitle = isSingleDay ? 'Hour' : 'Time';
+        const xAxisMin = isSingleDay ? 0 : undefined;
+        const xAxisMax = isSingleDay ? 23 : undefined;
+        
+        batteryChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: hours,
+                datasets: [
+                    {
+                        label: '預測 kpt',
+                        data: kpt_pred,
+                        borderColor: 'orange',
+                        fill: false
+                    },
+                    {
+                        label: '蓄電池電量',
+                        data: batteryData.batteryLevels,
+                        borderColor: 'blue',
+                        backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                        fill: true
+                    },
+                    {
+                        label: '充電量',
+                        data: batteryData.chargeAmounts,
+                        borderColor: 'purple',
+                        borderDash: [5, 5],
+                        fill: false
+                    },
+                    {
+                        label: '放電量',
+                        data: batteryData.dischargeAmounts,
+                        borderColor: 'brown',
+                        borderDash: [5, 5],
+                        fill: false
+                    },
+                    {
+                        label: '自放電損耗',
+                        data: batteryData.selfDischargeAmounts,
+                        borderColor: 'gray',
+                        borderDash: [2, 2],
+                        fill: false
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: true },
+                    title: { 
+                        display: true, 
+                        text: isSingleDay ? 
+                            `蓄電池策略分析 - ${dateRangeData ? dateRangeData[currentDayIndex].date : ''} (單日)` :
+                            '蓄電池策略分析 - 基於 kpt 預測（時間區間策略）'
+                    }
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: xAxisTitle },
+                        min: xAxisMin,
+                        max: xAxisMax
+                    },
+                    y: {
+                        title: { display: true, text: 'kWh' },
+                        min: yAxis.min,
+                        max: yAxis.max,
+                        ticks: { stepSize: 100 }
+                    }
+                }
+            }
+        });
+    } catch (error) {
+        console.error('蓄電池圖表渲染錯誤:', error);
+        alert('圖表渲染失敗，請檢查控制台錯誤信息');
+    }
+}
+
+// 分時段計費計算
+function renderBillSummary(hours, actual, dateStr) {
+    // 尖峰、半尖峰、離峰時段定義與電價
+    // 與 calc_bill.py 保持一致
+    function isSummer(date) {
+        const m = date.getMonth() + 1;
+        const d = date.getDate();
+        if (m > 5 && m < 10) return true;
+        if (m === 5 && d >= 16) return true;
+        if (m === 10 && d <= 15) return true;
+        return false;
+    }
+    function getTimeType(date, hour) {
+        const wd = date.getDay(); // 0=Sun, 6=Sat
+        const summer = isSummer(date);
+        if (wd >= 1 && wd <= 5) { // 平日
+            if (summer) {
+                if (hour >= 16 && hour < 22) return ['peak', 5.8];
+                if ((hour >= 9 && hour < 16) || (hour >= 22 && hour < 24)) return ['half_peak', 3.63];
+                return ['off_peak', 1.58];
+            } else {
+                if ((hour >= 6 && hour < 11) || (hour >= 14 && hour < 24)) return ['half_peak', 3.4];
+                return ['off_peak', 1.45];
+            }
+        } else if (wd === 6) { // 週六
+            if (summer) {
+                if (hour >= 9 && hour < 24) return ['half_peak', 1.78];
+                return ['off_peak', 1.58];
+            } else {
+                if ((hour >= 6 && hour < 11) || (hour >= 14 && hour < 24)) return ['half_peak', 1.65];
+                return ['off_peak', 1.45];
+            }
+        } else { // 週日
+            if (summer) return ['off_peak', 1.58];
+            return ['off_peak', 1.45];
+        }
+    }
+    let peakKwh = 0, halfPeakKwh = 0, offPeakKwh = 0;
+    let peakFee = 0, halfPeakFee = 0, offPeakFee = 0;
+    for (let i = 0; i < hours.length; i++) {
+        const hour = hours[i];
+        const kwh = actual[i];
+        const date = new Date(dateStr);
+        date.setHours(hour);
+        const [ttype, rate] = getTimeType(date, hour);
+        if (ttype === 'peak') {
+            peakKwh += kwh;
+            peakFee += kwh * rate;
+        } else if (ttype === 'half_peak') {
+            halfPeakKwh += kwh;
+            halfPeakFee += kwh * rate;
+        } else {
+            offPeakKwh += kwh;
+            offPeakFee += kwh * rate;
+        }
+    }
+    document.getElementById('peak-kwh').innerText = peakKwh.toFixed(2);
+    document.getElementById('peak-fee').innerText = peakFee.toFixed(2);
+    document.getElementById('halfpeak-kwh').innerText = halfPeakKwh.toFixed(2);
+    document.getElementById('halfpeak-fee').innerText = halfPeakFee.toFixed(2);
+    document.getElementById('offpeak-kwh').innerText = offPeakKwh.toFixed(2);
+    document.getElementById('offpeak-fee').innerText = offPeakFee.toFixed(2);
+}
+
+// 載入用電預測分頁圖表
+function loadLatestKpt() {
+    fetch('/latest_predict')
+        .then(res => res.json())
+        .then(data => {
+            renderLatestKptChart(data.hours, data.use_pred, data.kpt_pred, data.pv_pred);
+        });
+}
+// 歷史查詢分頁查詢
+function loadHistoryDates() {
+    fetch('/dates')
+        .then(res => res.json())
+        .then(data => {
+            const picker = document.getElementById('history-date-picker');
+            if (data.length === 0) {
+                picker.disabled = true;
+                return;
+            }
+            picker.disabled = false;
+            picker.min = data[0];
+            picker.max = data[data.length-1];
+            picker.value = data[data.length-1];
+        });
+}
+
+// 清除計費摘要
+function clearHistoryBillSummary() {
+    document.getElementById('peak-kwh').innerText = '--';
+    document.getElementById('peak-fee').innerText = '--';
+    document.getElementById('halfpeak-kwh').innerText = '--';
+    document.getElementById('halfpeak-fee').innerText = '--';
+    document.getElementById('offpeak-kwh').innerText = '--';
+    document.getElementById('offpeak-fee').innerText = '--';
+}
+
+// 檔案上傳相關功能
+function setupFileUpload() {
+    const uploadArea = document.getElementById('upload-area');
+    const fileInput = document.getElementById('file-input');
+    const uploadBtn = document.getElementById('upload-btn');
+    const uploadStatus = document.getElementById('upload-status');
+
+    // 拖拽上傳
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('dragover');
+    });
+
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.classList.remove('dragover');
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleFileSelect(files[0]);
+        }
+    });
+
+    // 點擊上傳
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
+
+    // 上傳按鈕
+    uploadBtn.addEventListener('click', uploadAndPredict);
+}
+
+function handleFileSelect(file) {
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+        alert('請選擇 CSV 檔案');
+        return;
+    }
+
+    uploadedFile = file;
+    document.getElementById('upload-btn').disabled = false;
+    document.getElementById('upload-status').innerHTML = `
+        <div class="alert alert-info">
+            <strong>已選擇檔案：</strong> ${file.name}<br>
+            <small>檔案大小：${(file.size / 1024).toFixed(2)} KB</small>
+        </div>
+    `;
+}
+
+function uploadAndPredict() {
+    if (!uploadedFile) {
+        alert('請先選擇檔案');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', uploadedFile);
+
+    const uploadBtn = document.getElementById('upload-btn');
+    const uploadStatus = document.getElementById('upload-status');
+
+    uploadBtn.disabled = true;
+    uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 預測中...';
+    uploadStatus.innerHTML = '<div class="alert alert-warning">正在進行預測，請稍候...</div>';
+
+    fetch('/upload_predict', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        
+        predictionResults = data.results;
+        displayPredictionResults(data);
+        uploadStatus.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+    })
+    .catch(error => {
+        console.error('預測失敗:', error);
+        uploadStatus.innerHTML = `<div class="alert alert-danger">預測失敗：${error.message}</div>`;
+    })
+    .finally(() => {
+        uploadBtn.disabled = false;
+        uploadBtn.innerHTML = '開始預測';
+    });
+}
+
+function displayPredictionResults(data) {
+    const resultsDiv = document.getElementById('upload-results');
+    const resultsTable = document.getElementById('upload-results-table');
+    const tbody = document.getElementById('results-tbody');
+
+    // 檢查是否有實際 kpt 數據
+    const hasActual = data.results.some(r => r.actual_kpt !== undefined);
+    
+    // 保存所有數據
+    allPredictionResults = data.results;
+    predictionResults = data.results;
+    
+    // 顯示基本結果
+    resultsDiv.innerHTML = `
+        <div class="alert alert-success">
+            <h6>預測完成！</h6>
+            <p>總共處理 ${data.results.length} 筆資料</p>
+            <p>預測範圍：${data.results[0].date} 到 ${data.results[data.results.length-1].date}</p>
+            <p>包含實際值：${hasActual ? '是' : '否'}</p>
+        </div>
+    `;
+
+    // 設定日期選擇器的可用日期
+    const dates = [...new Set(data.results.map(r => r.date))];
+    const datePicker = document.getElementById('upload-date-picker');
+    if (dates.length > 0) {
+        datePicker.min = dates[0];
+        datePicker.max = dates[dates.length - 1];
+        datePicker.value = dates[0]; // 預設選擇第一個日期
+        document.getElementById('change-date-btn').disabled = false;
+    }
+
+    // 顯示詳細表格
+    updateResultsTable(data.results);
+    resultsTable.style.display = 'block';
+
+    // 更新圖表
+    updateUploadChart();
+
+    // 設定下載按鈕
+    setupDownloadButton(data.results);
+}
+
+function updateUploadChart() {
+    if (!predictionResults) return;
+    if (uploadKptChart) uploadKptChart.destroy();
+    const ctx = document.getElementById('uploadKptChart').getContext('2d');
+    const hours = predictionResults.map(r => r.hour);
+    const use_pred = predictionResults.map(r => r.use_pred);
+    const pv_pred = predictionResults.map(r => r.pv_pred);
+    const kpt_pred = predictionResults.map(r => r.kpt_pred);
+    
+    // 動態調整 Y 軸範圍
+    const yAxis = getAdjustedYAxis([use_pred, pv_pred, kpt_pred]);
+    
+    let datasets = [
+        {
+            label: '預測耗電量 (use)',
+            data: use_pred,
+            borderColor: 'red',
+            fill: false
+        },
+        {
+            label: '預測發電量 (pv)',
+            data: pv_pred,
+            borderColor: 'green',
+            fill: false
+        },
+        {
+            label: '預測 kpt',
+            data: kpt_pred,
+            borderColor: 'orange',
+            fill: false
+        }
+    ];
+    uploadKptChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: hours,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: true },
+                title: { display: true, text: '上傳資料預測結果' }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Hour' },
+                    min: 0,
+                    max: 23
+                },
+                y: {
+                    title: { display: true, text: 'kWh' },
+                    min: yAxis.min,
+                    max: yAxis.max,
+                    ticks: { stepSize: 100 }
+                }
+            }
+        }
+    });
+}
+
+function setupDownloadButton(results) {
+    document.getElementById('download-csv-btn').onclick = function() {
+        // 建立 CSV 內容
+        const csvContent = [
+            'Date,Hour,Temperature,Humidity,Rain,day_week,Predicted_use,Predicted_pv,Predicted_kpt',
+            ...results.map(r => `${r.date},${r.hour},${r.temperature},${r.humidity},${r.rain},${r.day_week},${r.use_pred},${r.pv_pred},${r.kpt_pred}`)
+        ].join('\n');
+        // 建立下載連結
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'prediction_results.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+}
+
+// 歷史查詢按鈕事件
+document.getElementById('history-query-btn').onclick = function() {
+    const date = document.getElementById('history-date-picker').value;
+    fetch(`/predict?date=${date}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+            renderHistoryKptChart(
+                data.hours,
+                data.actual_use,
+                data.actual_kpt,
+                data.actual_pv,
+                data.use_pred,
+                data.kpt_pred,
+                data.pv_pred
+            );
+            renderBillSummary(data.hours, data.actual_kpt, date);
+        });
+};
+
+// 日期選擇器相關功能
+function setupDateSelector() {
+    const uploadDatePicker = document.getElementById('upload-date-picker');
+    const changeDateBtn = document.getElementById('change-date-btn');
+    
+    uploadDatePicker.addEventListener('change', function() {
+        changeDateBtn.disabled = false;
+    });
+
+    changeDateBtn.addEventListener('click', function() {
+        const selectedDate = uploadDatePicker.value;
+        if (!selectedDate || !allPredictionResults) {
+            alert('請先選擇日期');
+            return;
+        }
+        
+        // 從所有數據中過濾選定日期的數據
+        const filteredResults = allPredictionResults.filter(r => r.date === selectedDate);
+        
+        if (filteredResults.length === 0) {
+            alert('選定日期沒有數據');
+            return;
+        }
+        
+        // 更新當前顯示的數據
+        predictionResults = filteredResults;
+        updateUploadChart();
+        updateResultsTable(filteredResults);
+    });
+}
+
+function updateResultsTable(results) {
+    const tbody = document.getElementById('results-tbody');
+    tbody.innerHTML = '';
+    results.forEach(result => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${result.date}</td>
+            <td>${result.hour}</td>
+            <td><strong style='color:red'>${result.use_pred}</strong></td>
+            <td><strong style='color:green'>${result.pv_pred}</strong></td>
+            <td><strong style='color:orange'>${result.kpt_pred}</strong></td>
+        `;
+    });
+}
+
+
+
+// 蓄電池分析按鈕事件 - 支持日期範圍
+document.getElementById('battery-query-btn').onclick = function() {
+    const startDate = document.getElementById('battery-start-date').value;
+    const endDate = document.getElementById('battery-end-date').value;
+    
+    if (!startDate || !endDate) {
+        alert('請選擇開始和結束日期');
+        return;
+    }
+    
+    if (startDate > endDate) {
+        alert('開始日期不能晚於結束日期');
+        return;
+    }
+    
+    console.log('開始分析蓄電池策略，日期範圍:', startDate, '到', endDate);
+    
+    // 分析日期範圍
+    analyzeDateRange(startDate, endDate);
+};
+
+// 分析日期範圍的函數
+async function analyzeDateRange(startDate, endDate) {
+    try {
+        // 生成日期範圍
+        const dateRange = [];
+        const currentDate = new Date(startDate);
+        const endDateObj = new Date(endDate);
+        
+        while (currentDate <= endDateObj) {
+            dateRange.push(currentDate.toISOString().split('T')[0]);
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+        
+        console.log('日期範圍:', dateRange);
+        
+        // 收集所有日期的數據
+        const allData = [];
+        let currentBatteryLevel = 0; // 第一天初始電量為0
+        
+        for (let i = 0; i < dateRange.length; i++) {
+            const date = dateRange[i];
+            const isLastDay = i === dateRange.length - 1;
+            
+            const response = await fetch(`/predict?date=${date}`);
+            const data = await response.json();
+            
+            if (data.error) {
+                alert(`日期 ${date} 的數據錯誤: ${data.error}`);
+                return;
+            }
+            
+            console.log(`分析日期 ${date}，初始電量: ${currentBatteryLevel.toFixed(1)} kWh`);
+            
+            // 進行蓄電池策略分析，傳入前一天的剩餘電量
+            const batteryData = analyzeBatteryStrategy(
+                data.hours,
+                data.kpt_pred,
+                date,
+                isLastDay,
+                currentBatteryLevel
+            );
+            
+            // 累積統計數據
+            allData.push({
+                date: date,
+                hours: data.hours,
+                kpt_pred: data.kpt_pred,
+                batteryData: batteryData,
+                initialBatteryLevel: currentBatteryLevel
+            });
+            
+            // 更新下一天的初始電量（繼承前一天的剩餘電量）
+            currentBatteryLevel = batteryData.finalBatteryLevel;
+            console.log(`日期 ${date} 結束，剩餘電量: ${currentBatteryLevel.toFixed(1)} kWh`);
+        }
+        
+        // 保存日期範圍數據供切換使用
+        dateRangeData = allData;
+        currentDayIndex = 0;
+        
+        // 合併所有數據進行總體分析
+        const combinedData = combineDateRangeData(allData);
+        
+        console.log('合併分析數據:', combinedData);
+        
+        // 更新介面
+        updateBatteryStatus(combinedData, `${startDate} 到 ${endDate}`);
+        updateBatteryAnalysis(combinedData);
+        renderBatteryChart(combinedData.allHours, combinedData.allKptPred, combinedData);
+        updateBatteryDetails(combinedData.allHours, combinedData, `${startDate} 到 ${endDate}`);
+        
+        // 啟用切換按鈕並顯示當前日期
+        updateDayNavigation();
+        
+        console.log('日期範圍分析完成');
+        
+    } catch (error) {
+        console.error('日期範圍分析錯誤:', error);
+        alert('分析失敗：' + error.message);
+    }
+}
+
+// 合併日期範圍數據的函數
+function combineDateRangeData(allData) {
+    const combined = {
+        allHours: [],
+        allKptPred: [],
+        batteryLevels: [],
+        chargeAmounts: [],
+        dischargeAmounts: [],
+        selfDischargeAmounts: [],
+        gridUsage: [],
+        savings: [],
+        totalSavings: 0,
+        totalGridUsage: 0,
+        originalCost: 0,
+        newCost: 0,
+        netSavings: 0,
+        peakSavings: 0,
+        halfPeakSavings: 0,
+        offPeakSavings: 0,
+        totalPurchasePower: 0,
+        batteryElectricityCost: 0,
+        totalLoss: 0,
+        totalSavingsAmount: 0,
+        finalBatteryLevel: 0
+    };
+    
+    // 合併所有日期的數據
+    allData.forEach((dayData, dayIndex) => {
+        const { hours, kpt_pred, batteryData } = dayData;
+        
+        // 添加小時和預測數據
+        hours.forEach((hour, hourIndex) => {
+            combined.allHours.push(`${dayData.date} ${hour}:00`);
+            combined.allKptPred.push(kpt_pred[hourIndex]);
+        });
+        
+        // 合併蓄電池數據
+        combined.batteryLevels.push(...batteryData.batteryLevels);
+        combined.chargeAmounts.push(...batteryData.chargeAmounts);
+        combined.dischargeAmounts.push(...batteryData.dischargeAmounts);
+        combined.selfDischargeAmounts.push(...batteryData.selfDischargeAmounts);
+        combined.gridUsage.push(...batteryData.gridUsage);
+        combined.savings.push(...batteryData.savings);
+        
+        // 累積統計數據
+        combined.totalSavings += batteryData.totalSavings;
+        combined.totalGridUsage += batteryData.totalGridUsage;
+        combined.originalCost += batteryData.originalCost;
+        combined.newCost += batteryData.newCost;
+        combined.peakSavings += batteryData.peakSavings;
+        combined.halfPeakSavings += batteryData.halfPeakSavings;
+        combined.offPeakSavings += batteryData.offPeakSavings;
+        combined.totalPurchasePower += batteryData.totalPurchasePower;
+        combined.batteryElectricityCost += batteryData.batteryElectricityCost;
+        combined.totalLoss += batteryData.totalLoss;
+        combined.totalSavingsAmount += batteryData.totalSavingsAmount;
+        
+        // 最後一天的電量
+        if (dayIndex === allData.length - 1) {
+            combined.finalBatteryLevel = batteryData.finalBatteryLevel;
+        }
+    });
+    
+    // 計算淨節省
+    combined.netSavings = combined.originalCost - combined.newCost;
+    
+    return combined;
+}
+
+// 更新日期導航
+function updateDayNavigation() {
+    const prevBtn = document.getElementById('prev-day-btn');
+    const nextBtn = document.getElementById('next-day-btn');
+    const overviewBtn = document.getElementById('overview-btn');
+    const dayDisplay = document.getElementById('current-day-display');
+    
+    if (!dateRangeData || dateRangeData.length === 0) {
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        overviewBtn.disabled = true;
+        dayDisplay.textContent = '請先分析時間區間';
+        return;
+    }
+    
+    prevBtn.disabled = currentDayIndex === 0;
+    nextBtn.disabled = currentDayIndex === dateRangeData.length - 1;
+    overviewBtn.disabled = false;
+    
+    const currentDay = dateRangeData[currentDayIndex];
+    dayDisplay.textContent = `當前顯示：${currentDay.date} (${currentDayIndex + 1}/${dateRangeData.length})`;
+}
+
+// 顯示指定日期的數據
+function showDayData(dayIndex) {
+    if (!dateRangeData || dayIndex < 0 || dayIndex >= dateRangeData.length) {
+        return;
+    }
+    
+    currentDayIndex = dayIndex;
+    const dayData = dateRangeData[dayIndex];
+    
+    // 更新圖表顯示單日數據
+    renderBatteryChart(
+        dayData.hours,
+        dayData.kpt_pred,
+        dayData.batteryData
+    );
+    
+    // 更新詳細分析顯示單日數據
+    updateBatteryDetails(dayData.hours, dayData.batteryData, dayData.date);
+    
+    // 更新導航狀態
+    updateDayNavigation();
+    
+    // 顯示初始電量信息
+    const initialLevel = dayData.initialBatteryLevel || 0;
+    document.getElementById('current-day-display').textContent = 
+        `${dayData.date} (初始電量: ${initialLevel.toFixed(1)} kWh)`;
+}
+
+// 前一天按鈕事件
+document.getElementById('prev-day-btn').onclick = function() {
+    if (currentDayIndex > 0) {
+        showDayData(currentDayIndex - 1);
+    }
+};
+
+// 後一天按鈕事件
+document.getElementById('next-day-btn').onclick = function() {
+    if (currentDayIndex < dateRangeData.length - 1) {
+        showDayData(currentDayIndex + 1);
+    }
+};
+
+// 總體視圖按鈕事件
+document.getElementById('overview-btn').onclick = function() {
+    if (!dateRangeData || dateRangeData.length === 0) {
+        return;
+    }
+    
+    // 顯示總體視圖
+    const combinedData = combineDateRangeData(dateRangeData);
+    const startDate = dateRangeData[0].date;
+    const endDate = dateRangeData[dateRangeData.length - 1].date;
+    
+    renderBatteryChart(combinedData.allHours, combinedData.allKptPred, combinedData);
+    updateBatteryDetails(combinedData.allHours, combinedData, `${startDate} 到 ${endDate}`);
+    
+    // 更新顯示狀態
+    document.getElementById('current-day-display').textContent = `總體視圖：${startDate} 到 ${endDate} (時間區間分析)`;
+};
+
+// 更新蓄電池狀態
+function updateBatteryStatus(batteryData, dateStr) {
+    // 防護檢查
+    if (!batteryData || typeof batteryData !== 'object') {
+        console.error('batteryData 為空或無效');
+        return;
+    }
+    
+    const finalBatteryLevel = batteryData.finalBatteryLevel || 0;
+    const percentage = Math.round((finalBatteryLevel / 1260) * 100);
+    const progressBar = document.getElementById('battery-level');
+    const currentLevel = document.getElementById('battery-current');
+    
+    progressBar.style.width = percentage + '%';
+    progressBar.textContent = percentage + '%';
+    currentLevel.textContent = Math.round(finalBatteryLevel);
+    
+    // 根據電量改變顏色（考慮安全範圍）
+    if (percentage < 10) {
+        progressBar.className = 'progress-bar bg-danger';
+    } else if (percentage < 20) {
+        progressBar.className = 'progress-bar bg-warning';
+    } else if (percentage > 90) {
+        progressBar.className = 'progress-bar bg-info';
+    } else {
+        progressBar.className = 'progress-bar bg-success';
+    }
+    
+    // 更新蓄電池規格說明
+    const specDiv = document.querySelector('.alert-info ul');
+    if (specDiv) {
+        const statusText = percentage < 10 ? '⚠️ 電量過低' : 
+                          percentage > 90 ? '⚠️ 電量過高' : 
+                          '✅ 安全範圍';
+        
+        const isWeekendDay = isWeekend(dateStr);
+        const dayType = isWeekendDay ? '假日' : '平日';
+        
+        specDiv.innerHTML = `
+            <li>總容量：1260 kWh</li>
+            <li>安全範圍：126 - 1134 kWh (10% - 90%)</li>
+            <li>當前電量：${Math.round(finalBatteryLevel)} kWh (${percentage}%) ${statusText}</li>
+            <li>最大充電功率：200 kWh/小時</li>
+            <li>最大放電功率：200 kWh/小時</li>
+            <li>充電效率：100%（充電無損耗）</li>
+            <li>放電效率：90%（10%放電損耗）</li>
+            <li>自放電損耗：0.03%/小時</li>
+            <li>充電來源：離峰時段（1.58元）</li>
+            <li>充電目標：90%電量</li>
+            <li>放電策略：優先尖峰時段(5.8元)，半尖峰時段(3.63元)僅用30%</li>
+            <li>智能分配：保留電量給最高電價時段</li>
+            <li>時間區間：從開始日期到結束日期，繼承前一天的剩餘電量</li>
+            <li>結束策略：最後一天清空蓄電池，不留電</li>
+            <li>分析範圍：${dateStr}</li>
+        `;
+    }
+}
+
+// 更新省錢方案分析
+function updateBatteryAnalysis(batteryData) {
+    // 防護檢查：確保 batteryData 存在且包含必要屬性
+    if (!batteryData || typeof batteryData !== 'object') {
+        console.error('batteryData 為空或無效');
+        return;
+    }
+    
+    const analysisDiv = document.getElementById('battery-analysis');
+    
+    // 安全地取得數組，如果不存在則使用空數組
+    const selfDischargeAmounts = batteryData.selfDischargeAmounts || [];
+    const chargeAmounts = batteryData.chargeAmounts || [];
+    const dischargeAmounts = batteryData.dischargeAmounts || [];
+    
+    const totalSelfDischarge = selfDischargeAmounts.reduce((sum, val) => sum + (val || 0), 0);
+    const totalCharge = chargeAmounts.reduce((sum, val) => sum + (val || 0), 0);
+    const totalDischarge = batteryData.totalEffectiveDischarge || dischargeAmounts.reduce((sum, val) => sum + (val || 0), 0);
+    const efficiency = totalDischarge > 0 ? ((totalDischarge / (totalCharge - totalSelfDischarge)) * 100).toFixed(1) : 0;
+    const utilizationRate = ((totalDischarge + totalSelfDischarge) / (totalCharge + totalSelfDischarge)) * 100;
+    
+    // 安全地取得數值，如果不存在則使用0
+    const safeValue = (value) => (value !== undefined && value !== null) ? value : 0;
+    
+    analysisDiv.innerHTML = `
+        <div class="alert alert-success">
+            <h6>節省效果：</h6>
+            <p><strong>原始電費：</strong> ${safeValue(batteryData.originalCost).toFixed(2)} 元</p>
+            <p><strong>使用蓄電池後電費：</strong> ${safeValue(batteryData.newCost).toFixed(2)} 元</p>
+            <p><strong>節省金額：</strong> <span class="text-success fw-bold">${safeValue(batteryData.netSavings).toFixed(2)} 元</span></p>
+            <p><strong>節省比例：</strong> ${batteryData.originalCost > 0 ? ((safeValue(batteryData.netSavings) / safeValue(batteryData.originalCost)) * 100).toFixed(1) : 0}%</p>
+        </div>
+        <div class="alert" style="background-color: #e2e3e5; border-color: #d6d8db;">
+            <h6 class="text-dark">蓄電池統計：</h6>
+            <div class="row">
+                <div class="col-3">
+                    <p class="text-dark"><strong>總購電量：</strong> ${safeValue(batteryData.totalPurchasePower).toFixed(1)} kWh</p>
+                </div>
+                <div class="col-3">
+                    <p class="text-dark"><strong>蓄電池電費：</strong> ${safeValue(batteryData.batteryElectricityCost).toFixed(2)} 元</p>
+                </div>
+                <div class="col-3">
+                    <p class="text-dark"><strong>總損耗：</strong> ${safeValue(batteryData.totalLoss).toFixed(1)} kWh</p>
+                </div>
+                <div class="col-3">
+                    <p class="text-dark"><strong>節約金額：</strong> ${safeValue(batteryData.totalSavingsAmount).toFixed(2)} 元</p>
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-4">
+                <div class="card" style="background-color: #fff3cd; border-color: #ffeaa7;">
+                    <div class="card-body text-center">
+                        <h6 class="text-dark">尖峰時段節省</h6>
+                        <h4 class="text-danger">${safeValue(batteryData.peakSavings).toFixed(2)} 元</h4>
+                        <small class="text-dark">5.8元/度</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="card" style="background-color: #d1ecf1; border-color: #bee5eb;">
+                    <div class="card-body text-center">
+                        <h6 class="text-dark">半尖峰時段節省</h6>
+                        <h4 class="text-primary">${safeValue(batteryData.halfPeakSavings).toFixed(2)} 元</h4>
+                        <small class="text-dark">3.63元/度</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="card" style="background-color: #d4edda; border-color: #c3e6cb;">
+                    <div class="card-body text-center">
+                        <h6 class="text-dark">離峰時段充電</h6>
+                        <h4 class="text-success">${totalCharge.toFixed(1)} kWh</h4>
+                        <small class="text-dark">1.58元/度</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-3">
+                <div class="card bg-light">
+                    <div class="card-body text-center">
+                        <h6>總充電量</h6>
+                        <h4 class="text-primary">${totalCharge.toFixed(1)} kWh</h4>
+                    </div>
+                </div>
+            </div>
+            <div class="col-3">
+                <div class="card bg-light">
+                    <div class="card-body text-center">
+                        <h6>有效放電量</h6>
+                        <h4 class="text-success">${totalDischarge.toFixed(1)} kWh</h4>
+                        <small class="text-muted">實際可用電量</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-3">
+                <div class="card bg-light">
+                    <div class="card-body text-center">
+                        <h6>實際放電量</h6>
+                        <h4 class="text-info">${(batteryData.totalBatteryDischarge || totalDischarge / 0.9).toFixed(1)} kWh</h4>
+                        <small class="text-muted">從蓄電池放出</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-3">
+                <div class="card bg-light">
+                    <div class="card-body text-center">
+                        <h6>自放電損耗</h6>
+                        <h4 class="text-warning">${totalSelfDischarge.toFixed(1)} kWh</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        ${safeValue(batteryData.remainingBatteryLevel) > 0 ? `
+        <div class="row mt-2">
+            <div class="col-12">
+                <div class="alert alert-warning">
+                    <strong>注意：</strong> 蓄電池剩餘電量 ${safeValue(batteryData.remainingBatteryLevel).toFixed(1)} kWh 未完全清空
+                </div>
+            </div>
+        </div>
+        ` : ''}
+        </div>
+        <div class="alert mt-3" style="background-color: #d1ecf1; border-color: #bee5eb;">
+            <h6 class="text-dark">效率分析：</h6>
+            <p class="text-dark"><strong>整體效率：</strong> ${efficiency}% (考慮自放電損耗)</p>
+            <p class="text-dark"><strong>蓄電池使用率：</strong> ${utilizationRate.toFixed(1)}% (避免過度損耗)</p>
+            <p class="text-dark"><strong>自放電損耗比例：</strong> ${totalCharge > 0 ? ((totalSelfDischarge / totalCharge) * 100).toFixed(1) : 0}%</p>
+            <p class="text-dark"><strong>充電效率：</strong> 100% (充電無損耗)</p>
+            <p class="text-dark"><strong>放電效率：</strong> 90% (10%放電損耗)</p>
+            <p class="text-dark"><strong>能量平衡：</strong> 充電量 = 實際放電量 + 自放電損耗 + 剩餘電量 ${safeValue(batteryData.remainingBatteryLevel) > 0 ? '⚠️' : '✓'}</p>
+            <p class="text-dark"><strong>智能策略：</strong> 優先保留電量給尖峰時段(5.8元)，半尖峰時段(3.63元)僅使用30%電量</p>
+            <p class="text-dark"><strong>時間區間：</strong> 從開始日期到結束日期，繼承前一天的剩餘電量，最後一天清空電量</p>
+        </div>
+        
+        ${batteryData.dailyRates ? `
+        <div class="alert mt-3" style="background-color: #fff3cd; border-color: #ffeaa7;">
+            <h6 class="text-dark">當日電價時段分析：</h6>
+            <p class="text-dark"><strong>尖峰時段 (5.8元)：</strong> ${batteryData.dailyRates.peakHours.length > 0 ? batteryData.dailyRates.peakHours.map(h => h + '時').join(', ') : '無'}</p>
+            <p class="text-dark"><strong>半尖峰時段 (3.63元)：</strong> ${batteryData.dailyRates.halfPeakHours.length > 0 ? batteryData.dailyRates.halfPeakHours.map(h => h + '時').join(', ') : '無'}</p>
+            <p class="text-dark"><strong>離峰時段 (1.58元)：</strong> ${batteryData.dailyRates.offPeakHours.length > 0 ? batteryData.dailyRates.offPeakHours.map(h => h + '時').join(', ') : '無'}</p>
+        </div>
+        ` : ''}
+        
+        <div class="alert mt-3" style="background-color: #f8d7da; border-color: #f5c6cb;">
+            <h6 class="text-dark">能量平衡驗證：</h6>
+            <p class="text-dark"><strong>總充電量：</strong> ${totalCharge.toFixed(1)} kWh</p>
+            <p class="text-dark"><strong>實際放電量：</strong> ${(safeValue(batteryData.totalBatteryDischarge) || totalDischarge / 0.9).toFixed(1)} kWh</p>
+            <p class="text-dark"><strong>自放電損耗：</strong> ${totalSelfDischarge.toFixed(1)} kWh</p>
+            <p class="text-dark"><strong>剩餘電量：</strong> ${safeValue(batteryData.remainingBatteryLevel).toFixed(1)} kWh</p>
+            <p class="text-dark"><strong>平衡驗證：</strong> ${totalCharge.toFixed(1)} = ${(safeValue(batteryData.totalBatteryDischarge) || totalDischarge / 0.9).toFixed(1)} + ${totalSelfDischarge.toFixed(1)} + ${safeValue(batteryData.remainingBatteryLevel).toFixed(1)}</p>
+            <p class="text-dark"><strong>差異：</strong> ${(totalCharge - ((safeValue(batteryData.totalBatteryDischarge) || totalDischarge / 0.9) + totalSelfDischarge + safeValue(batteryData.remainingBatteryLevel))).toFixed(1)} kWh</p>
+        </div>
+    `;
+}
+
+// 更新詳細分析結果
+function updateBatteryDetails(hours, batteryData, dateStr) {
+    // 防護檢查
+    if (!batteryData || typeof batteryData !== 'object') {
+        console.error('batteryData 為空或無效');
+        return;
+    }
+    
+    const detailsDiv = document.getElementById('battery-details');
+    let tableRows = '';
+    
+    // 安全地取得數組
+    const chargeAmounts = batteryData.chargeAmounts || [];
+    const dischargeAmounts = batteryData.dischargeAmounts || [];
+    const selfDischargeAmounts = batteryData.selfDischargeAmounts || [];
+    const gridUsage = batteryData.gridUsage || [];
+    const savings = batteryData.savings || [];
+    const batteryLevels = batteryData.batteryLevels || [];
+    
+    for (let i = 0; i < hours.length; i++) {
+        const hour = hours[i];
+        const rate = getElectricityRate(new Date(dateStr), hour);
+        const charge = chargeAmounts[i] || 0;
+        const discharge = dischargeAmounts[i] || 0;
+        const selfDischarge = selfDischargeAmounts[i] || 0;
+        const gridUsageVal = gridUsage[i] || 0;
+        const savingsVal = savings[i] || 0;
+        const batteryLevel = batteryLevels[i] || 0;
+        
+        tableRows += `
+            <tr>
+                <td>${hour}</td>
+                <td>${rate.toFixed(2)}</td>
+                <td>${charge.toFixed(1)}</td>
+                <td>${discharge.toFixed(1)}</td>
+                <td>${selfDischarge.toFixed(1)}</td>
+                <td>${batteryLevel.toFixed(1)}</td>
+                <td>${gridUsageVal.toFixed(1)}</td>
+                <td>${savingsVal.toFixed(2)}</td>
+            </tr>
+        `;
+    }
+    
+    detailsDiv.innerHTML = `
+        <div class="table-responsive">
+            <table class="table table-striped table-sm">
+                <thead>
+                    <tr>
+                        <th>小時</th>
+                        <th>電價 (元/kWh)</th>
+                        <th>充電量 (kWh)</th>
+                        <th>放電量 (kWh)</th>
+                        <th>自放電損耗 (kWh)</th>
+                        <th>蓄電池電量 (kWh)</th>
+                        <th>電網用電 (kWh)</th>
+                        <th>節省金額 (元)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tableRows}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+// 分頁切換事件
+document.getElementById('kpt-tab').addEventListener('shown.bs.tab', loadLatestKpt);
+
+document.getElementById('history-tab').addEventListener('shown.bs.tab', function() {
+    loadHistoryDates();
+    clearHistoryBillSummary();
+});
+
+document.getElementById('battery-tab').addEventListener('shown.bs.tab', function() {
+    loadHistoryDates();
+    // 設定蓄電池日期選擇器
+    fetch('/dates')
+        .then(res => res.json())
+        .then(data => {
+            if (data.length > 0) {
+                const startPicker = document.getElementById('battery-start-date');
+                const endPicker = document.getElementById('battery-end-date');
+                startPicker.min = data[0];
+                startPicker.max = data[data.length-1];
+                startPicker.value = data[0];
+                endPicker.min = data[0];
+                endPicker.max = data[data.length-1];
+                endPicker.value = data[Math.min(6, data.length-1)]; // 預設選擇7天
+            }
+        });
+    
+    // 清除之前的圖表
+    if (batteryChart) {
+        batteryChart.destroy();
+        batteryChart = null;
+    }
+    
+    // 重置分析結果
+    document.getElementById('battery-analysis').innerHTML = '<p class="text-muted">請選擇日期範圍進行分析</p>';
+    document.getElementById('battery-details').innerHTML = '<p class="text-muted">請選擇日期範圍查看詳細分析</p>';
+    
+    // 重置導航狀態
+    dateRangeData = null;
+    currentDayIndex = 0;
+    updateDayNavigation();
+});
+
+document.getElementById('upload-tab').addEventListener('shown.bs.tab', function() {
+    // 重置上傳狀態
+    uploadedFile = null;
+    predictionResults = null;
+    allPredictionResults = null; // 重置所有數據
+    document.getElementById('upload-btn').disabled = true;
+    document.getElementById('upload-status').innerHTML = '';
+    document.getElementById('upload-results').innerHTML = '<p class="text-muted">請先上傳檔案進行預測</p>';
+    document.getElementById('upload-results-table').style.display = 'none';
+    document.getElementById('change-date-btn').disabled = true;
+    if (uploadKptChart) {
+        uploadKptChart.destroy();
+        uploadKptChart = null;
+    }
+    setupDateSelector(); // 設定上傳資料的日期選擇器
+});
+
+// 頁面載入時自動載入用電預測
+document.addEventListener('DOMContentLoaded', function() {
+    loadLatestKpt();
+    loadHistoryDates();
+    setupFileUpload();
+    setupDateSelector();
+});
+</script>
+</body>
+</html>
+</html>

@@ -12,7 +12,7 @@ plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft JhengHei', 'Si
 plt.rcParams['axes.unicode_minus'] = False
 
 # 載入資料
-df = pd.read_csv('merged_hourly.csv')
+df = pd.read_csv('hourly_aggregated.csv')
 df['Date'] = pd.to_datetime(df['Date'])
 df['weekday'] = df['Date'].dt.weekday
 df['rain_percent'] = df['Rain']
@@ -72,8 +72,8 @@ def plot_and_table(date_str):
     ax.set_xticks(hours_full)
     ax.set_xlim(-0.5, 23.5)
 
-    ax.set_ylim(-600, 2800)  # Y軸範圍改成 -600 ~ 2800
-    ax.set_yticks(np.arange(-600, 2801, 200))  # 固定200刻度間距
+    ax.set_ylim(-200, 1200)  # Y軸範圍改成 -600 ~ 2800
+    ax.set_yticks(np.arange(-200, 1200, 100))  # 固定200刻度間距
     ax.grid(True, axis='y', linestyle='--', alpha=0.7)
 
     ax.legend()
