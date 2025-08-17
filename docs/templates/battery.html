@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>蓄電池管理 - 智慧能源監控平台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .chart-container { min-height: 400px; }
+        .nav-link.active { background-color: #007bff !important; color: white !important; }
+    </style>
+</head>
+<body>
+<div class="container py-4">
+    <h1 class="mb-4">智慧能源監控平台</h1>
+    
+    <!-- 導航欄 -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+        <div class="container-fluid">
+            <span class="navbar-brand">功能選單</span>
+            <div class="navbar-nav">
+                <a class="nav-link" href="/prediction">用電預測</a>
+                <a class="nav-link" href="/history">歷史查詢</a>
+                <a class="nav-link active" href="/battery">蓄電池管理</a>
+                <a class="nav-link" href="/upload">資料上傳預測</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="alert alert-info">
+        <ul>
+            <li>本系統預測三條線：<b style='color:red'>耗電量 (use)</b>、<b style='color:green'>發電量 (pv)</b>、<b style='color:orange'>淨負載 (kpt = use - pv)</b>。</li>
+            <li>發電量 (pv) 僅用天氣與小時預測，夜間自動為 0。</li>
+            <li>所有預測均經過對應 AI 模型 (xgb_use.json, xgb_pv.json)。</li>
+            <li><b style='color:blue'>契約容量限制：785 kWh/小時</b> - 每小時從電網購電量不能超過此限制。</li>
+        </ul>
+    </div>
+
+    <!-- 蓄電池設定 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header" style="cursor: pointer;" onclick="toggleBatterySettings()">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">蓄電池參數設定</h5>
+                        <i class="fas fa-chevron-down" id="battery-settings-icon"></i>
+                    </div>
+                </div>
+                <div class="card-body" id="battery-settings-body" style="display: none;">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>蓄電池規格</h6>
+                            <div class="mb-3">
+                                <label for="battery-capacity" class="form-label">總容量 (kWh)：</label>
+                                <input type="number" id="battery-capacity" class="form-control" value="1260" min="100" max="10000">
+                            </div>
+                            <div class="mb-3">
+                                <label for="max-charge-rate" class="form-label">最大充電功率 (kWh/小時)：</label>
+                                <input type="number" id="max-charge-rate" class="form-control" value="200" min="10" max="1000">
+                            </div>
+                            <div class="mb-3">
+                                <label for="max-discharge-rate" class="form-label">最大放電功率 (kWh/小時)：</label>
+                                <input type="number" id="max-discharge-rate" class="form-control" value="200" min="10" max="1000">
+                            </div>
+                            <div class="mb-3">
+                                <label for="charge-efficiency" class="form-label">充電效率 (%)：</label>
+                                <input type="number" id="charge-efficiency" class="form-control" value="100" min="50" max="100" step="0.1">
+                            </div>
+                            <div class="mb-3">
+                                <label for="discharge-efficiency" class="form-label">放電效率 (%)：</label>
+                                <input type="number" id="discharge-efficiency" class="form-control" value="90" min="50" max="100" step="0.1">
+                            </div>
+                            <div class="mb-3">
+                                <label for="self-discharge-rate" class="form-label">自放電損耗 (%/小時)：</label>
+                                <input type="number" id="self-discharge-rate" class="form-control" value="0.03" min="0" max="1" step="0.01">
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>安全設定</h6>
+                            <div class="mb-3">
+                                <label for="min-safety-level" class="form-label">最小安全電量 (%)：</label>
+                                <input type="number" id="min-safety-level" class="form-control" value="10" min="0" max="50">
+                            </div>
+                            <div class="mb-3">
+                                <label for="max-safety-level" class="form-label">最大安全電量 (%)：</label>
+                                <input type="number" id="max-safety-level" class="form-control" value="90" min="50" max="100">
+                            </div>
+                            <div class="mb-3">
+                                <label for="initial-battery-level" class="form-label">初始電量 (kWh)：</label>
+                                <input type="number" id="initial-battery-level" class="form-control" value="0" min="0">
+                            </div>
+                            
+                            <h6 class="mt-4">契約容量設定</h6>
+                            <div class="mb-3">
+                                <label for="contract-capacity" class="form-label">契約容量限制 (kWh/小時)：</label>
+                                <input type="number" id="contract-capacity" class="form-control" value="785" min="100" max="2000">
+                            </div>
+                            
+                            <div class="mt-4">
+                                <button class="btn btn-success" id="apply-settings-btn">套用設定</button>
+                                <button class="btn btn-outline-secondary ms-2" id="reset-settings-btn">重置為預設值</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 蓄電池狀態 -->
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>蓄電池狀態</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">當前電量：</label>
+                        <div class="progress mb-2">
+                            <div id="battery-level" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                        </div>
+                        <small class="text-muted">
+                            <span id="battery-current">0</span> / <span id="battery-capacity-display">1260</span> kWh
+                        </small>
+                    </div>
+                    <div class="mb-3">
+                        <label for="battery-start-date" class="form-label">開始日期：</label>
+                        <input type="date" id="battery-start-date" class="form-control" style="max-width:200px;display:inline-block;">
+                    </div>
+                    <div class="mb-3">
+                        <label for="battery-end-date" class="form-label">結束日期：</label>
+                        <input type="date" id="battery-end-date" class="form-control" style="max-width:200px;display:inline-block;">
+                        <button class="btn btn-primary ms-2" id="battery-query-btn">分析時間區間</button>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="alert" style="background-color: #d1ecf1; border-color: #bee5eb;">
+                            <strong class="text-dark">初始電量：</strong> <span class="text-dark" id="initial-level-display">0度（系統自動設定）</span>
+                        </div>
+                    </div>
+                    <div class="alert" style="background-color: #d1ecf1; border-color: #bee5eb;">
+                        <h6 class="text-dark">當前蓄電池規格：</h6>
+                        <ul class="mb-0 text-dark" id="battery-specs-display">
+                            <li>總容量：1260 kWh</li>
+                            <li>安全範圍：126 - 1134 kWh (10% - 90%)</li>
+                            <li>最大充電功率：200 kWh/小時</li>
+                            <li>最大放電功率：200 kWh/小時</li>
+                            <li>充電效率：100%（充電無損耗）</li>
+                            <li>放電效率：90%（10%放電損耗）</li>
+                            <li>自放電損耗：0.03%/小時</li>
+                            <li><strong style='color:blue'>契約容量限制：785 kWh/小時</strong></li>
+                            <li><strong style='color:red'>策略：優先避免超過契約容量</strong></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>省錢方案分析</h5>
+                </div>
+                <div class="card-body">
+                    <div id="battery-analysis">
+                        <p class="text-muted">請選擇日期進行分析</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 契約容量監控 -->
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5>契約容量監控（蓄電池策略後）</h5>
+                </div>
+                <div class="card-body">
+                    <div id="battery-contract-monitor">
+                        <p class="text-muted">請選擇日期範圍進行分析</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 圖表導航控制 -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="mb-3">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="btn-group" role="group">
+                            <button class="btn btn-outline-secondary" id="prev-day-btn" disabled>前一天</button>
+                            <button class="btn btn-outline-secondary" id="next-day-btn" disabled>後一天</button>
+                            <button class="btn btn-outline-primary" id="overview-btn" disabled>總體視圖</button>
+                        </div>
+                        <span class="ms-3" id="current-day-display">請先分析時間區間</span>
+                    </div>
+                    <div class="dropdown">
+                        <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" id="chartLinesDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fas fa-eye"></i> 線段顯示設定
+                        </button>
+                        <ul class="dropdown-menu" id="chartLinesMenu">
+                            <li><a class="dropdown-item" href="#" data-dataset="use">
+                                <input type="checkbox" id="show-use" checked> 預測耗電量 (use)
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" data-dataset="pv">
+                                <input type="checkbox" id="show-pv" checked> 預測發電量 (pv)
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" data-dataset="kpt">
+                                <input type="checkbox" id="show-kpt" checked> 預測 kpt
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" data-dataset="battery">
+                                <input type="checkbox" id="show-battery" checked> 蓄電池電量
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" data-dataset="charge">
+                                <input type="checkbox" id="show-charge" checked> 充電量
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" data-dataset="discharge">
+                                <input type="checkbox" id="show-discharge" checked> 放電量
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" data-dataset="grid">
+                                <input type="checkbox" id="show-grid" checked> 電網用電量
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" data-dataset="contract">
+                                <input type="checkbox" id="show-contract" checked> 契約容量限制
+                            </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="#" id="select-all-lines">
+                                <i class="fas fa-check-double"></i> 全選
+                            </a></li>
+                            <li><a class="dropdown-item" href="#" id="deselect-all-lines">
+                                <i class="fas fa-times"></i> 全不選
+                            </a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-container" style="min-height: 400px;">
+                <canvas id="batteryChart" style="cursor: pointer;" title="點擊數據點查看詳細資訊"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 詳細分析結果 -->
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header" style="cursor: pointer;" onclick="toggleDetailedResults()">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">詳細分析結果</h5>
+                        <i class="fas fa-chevron-down" id="detailed-results-icon"></i>
+                    </div>
+                </div>
+                <div class="card-body" id="detailed-results-body" style="display: none;">
+                    <div id="battery-details">
+                        <p class="text-muted">請選擇日期查看詳細分析</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// 全域變數
+let batteryChart = null;
+let dateRangeData = null; // 保存日期範圍數據
+let currentDayIndex = 0; // 當前顯示的日期索引
+
+// 線段顯示設定 - 持久化儲存
+let chartLineSettings = {
+    use: true,
+    pv: true,
+    kpt: true,
+    battery: true,
+    charge: true,
+    discharge: true,
+    grid: true,
+    contract: true
+};
+
+// 蓄電池設定參數
+let batterySettings = {
+    capacity: 1260,
+    maxChargeRate: 200,
+    maxDischargeRate: 200,
+    chargeEfficiency: 100,
+    dischargeEfficiency: 90,
+    selfDischargeRate: 0.03,
+    minSafetyLevel: 10,
+    maxSafetyLevel: 90,
+    initialLevel: 0,
+    contractCapacity: 785
+};
+
+// 動態調整 Y 軸範圍的函數
+function getAdjustedYAxis(dataArrays) {
+    const allData = dataArrays.flat();
+    const minVal = Math.min(...allData);
+    const maxVal = Math.max(...allData);
+    
+    // 預設範圍
+    let yMin = -100;
+    let yMax = 800;
+    
+    // 如果數據超出範圍，則調整
+    if (minVal < -100) {
+        yMin = Math.floor(minVal / 100) * 100 - 100;
+    }
+    if (maxVal > 800) {
+        yMax = Math.ceil(maxVal / 100) * 100 + 100;
+    }
+    
+    return { min: yMin, max: yMax };
+}
+
+// 契約容量監控顯示函數
+function displayContractMonitor(contractCheck, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    if (!contractCheck) {
+        container.innerHTML = '<p class="text-muted">無契約容量資料</p>';
+        return;
+    }
+    
+    const { contract_capacity, total_power_usage, violations, max_power, min_power, avg_power } = contractCheck;
+    
+    // 判斷是否為蓄電池策略後的監控
+    const isBatteryStrategy = containerId === 'battery-contract-monitor';
+    
+    let html = `
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>契約容量</h6>
+                        <h4 class="text-primary">${contract_capacity} kWh</h4>
+                        <small class="text-muted">每小時限制</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>最大用電</h6>
+                        <h4 class="${max_power > contract_capacity ? 'text-danger' : 'text-success'}">${max_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">${max_power > contract_capacity ? '⚠️ 超過限制' : '✅ 符合限制'}</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-info">
+                    <div class="card-body text-center">
+                        <h6>平均用電</h6>
+                        <h4 class="text-info">${avg_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時平均</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-warning">
+                    <div class="card-body text-center">
+                        <h6>最小用電</h6>
+                        <h4 class="text-warning">${min_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時最低</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    if (violations.length > 0) {
+        html += `
+            <div class="alert alert-danger mt-3">
+                <h6>⚠️ 契約容量違規警告</h6>
+                <p>發現 ${violations.length} 個小時超過契約容量限制：</p>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>小時</th>
+                                <th>總用電量 (kWh)</th>
+                                <th>超出量 (kWh)</th>
+                                <th>kpt (kWh)</th>
+                                <th>充電量 (kWh)</th>
+                                <th>放電量 (kWh)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        
+        violations.forEach(violation => {
+            html += `
+                <tr>
+                    <td>${violation.hour}時</td>
+                    <td><strong class="text-danger">${violation.total_power.toFixed(1)}</strong></td>
+                    <td><strong class="text-danger">+${violation.excess.toFixed(1)}</strong></td>
+                    <td>${violation.kpt.toFixed(1)}</td>
+                    <td>${violation.charge.toFixed(1)}</td>
+                    <td>${violation.discharge.toFixed(1)}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="alert alert-success mt-3">
+                <h6>✅ 契約容量符合</h6>
+                <p>所有小時的用電量都在契約容量限制內，最大用電量為 ${max_power.toFixed(1)} kWh。</p>
+                ${isBatteryStrategy ? '<p><strong>蓄電池策略已成功避免超過契約容量限制。</strong></p>' : ''}
+            </div>
+        `;
+    }
+    
+    // 如果是蓄電池策略，加入特別說明
+    if (isBatteryStrategy) {
+        html += `
+            <div class="alert alert-info mt-3">
+                <h6>🔋 蓄電池策略說明</h6>
+                <p><strong>契約容量優先：</strong> 蓄電池策略優先考慮契約容量限制，避免超過785 kWh/小時。</p>
+                <p><strong>緊急處理：</strong> 當預測會超過契約容量時，系統會強制放電以降低電網用電量。</p>
+                <p><strong>智能調節：</strong> 在離峰時段充電時會檢查是否會超過契約容量，必要時減少充電量。</p>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
+// 取得電價函數
+function getElectricityRate(date, hour) {
+    function isSummer(date) {
+        const m = date.getMonth() + 1;
+        const d = date.getDate();
+        if (m > 5 && m < 10) return true;
+        if (m === 5 && d >= 16) return true;
+        if (m === 10 && d <= 15) return true;
+        return false;
+    }
+    
+    function getTimeType(date, hour) {
+        const wd = date.getDay(); // 0=Sun, 6=Sat
+        const summer = isSummer(date);
+        if (wd >= 1 && wd <= 5) { // 平日
+            if (summer) {
+                if (hour >= 16 && hour < 22) return 5.8;
+                if ((hour >= 9 && hour < 16) || (hour >= 22 && hour < 24)) return 3.63;
+                return 1.58;
+            } else {
+                if ((hour >= 6 && hour < 11) || (hour >= 14 && hour < 24)) return 3.4;
+                return 1.45;
+            }
+        } else if (wd === 6) { // 週六
+            if (summer) {
+                if (hour >= 9 && hour < 24) return 1.78;
+                return 1.58;
+            } else {
+                if ((hour >= 6 && hour < 11) || (hour >= 14 && hour < 24)) return 1.65;
+                return 1.45;
+            }
+        } else { // 週日
+            if (summer) return 1.58;
+            return 1.45;
+        }
+    }
+    
+    return getTimeType(date, hour);
+}
+
+// 檢查是否為假日
+function isWeekend(dateStr) {
+    const date = new Date(dateStr);
+    return date.getDay() === 0 || date.getDay() === 6; // 0=週日, 6=週六
+}
+
+// 分析當天電價時段分布
+function analyzeDailyRates(dateStr) {
+    const rates = [];
+    const rateTypes = [];
+    
+    for (let hour = 0; hour < 24; hour++) {
+        const date = new Date(dateStr);
+        date.setHours(hour);
+        const rate = getElectricityRate(date, hour);
+        rates.push(rate);
+        
+        if (rate >= 5.0) {
+            rateTypes.push({ hour, rate, type: '尖峰', color: 'red' });
+        } else if (rate >= 3.0 && rate < 4.0) {
+            rateTypes.push({ hour, rate, type: '半尖峰', color: 'orange' });
+        } else {
+            rateTypes.push({ hour, rate, type: '離峰', color: 'green' });
+        }
+    }
+    
+    return {
+        rates,
+        rateTypes,
+        peakHours: rateTypes.filter(r => r.type === '尖峰').map(r => r.hour),
+        halfPeakHours: rateTypes.filter(r => r.type === '半尖峰').map(r => r.hour),
+        offPeakHours: rateTypes.filter(r => r.type === '離峰').map(r => r.hour)
+    };
+}
+
+// 蓄電池策略分析
+function analyzeBatteryStrategy(use_pred, pv_pred, kpt_pred, hours, dateStr, initialBatteryLevel = null) {
+    const contractCapacity = batterySettings.contractCapacity;
+    const batteryCapacity = batterySettings.capacity; // kWh
+    const maxChargeRate = batterySettings.maxChargeRate; // kWh/hour
+    const maxDischargeRate = batterySettings.maxDischargeRate; // kWh/hour
+    const chargeEfficiency = batterySettings.chargeEfficiency / 100; // 轉換為小數
+    const dischargeEfficiency = batterySettings.dischargeEfficiency / 100; // 轉換為小數
+    const selfDischargeRate = batterySettings.selfDischargeRate / 100; // 轉換為小數
+    const minSafetyLevel = batterySettings.minSafetyLevel / 100; // 轉換為小數
+    const maxSafetyLevel = batterySettings.maxSafetyLevel / 100; // 轉換為小數
+    
+    // 使用傳入的初始電量，如果沒有則使用設定值，確保不低於最低安全水平
+    let batteryLevel = initialBatteryLevel !== null ? 
+        Math.max(initialBatteryLevel, batteryCapacity * minSafetyLevel) : 
+        Math.max(batterySettings.initialLevel, batteryCapacity * minSafetyLevel);
+    const batteryLevels = [];
+    const chargeAmounts = [];
+    const dischargeAmounts = [];
+    const gridUsage = [];
+    const contractViolations = [];
+    
+    // 分析電價時段
+    const rateAnalysis = analyzeDailyRates(dateStr);
+    
+    // 預先分析未來高耗電時段，用於放電策略決策
+    const futureHighLoadHours = [];
+    for (let i = 0; i < hours.length; i++) {
+        const futureKpt = kpt_pred[i];
+        if (futureKpt > contractCapacity * 0.8) { // 未來可能超過契約容量80%的時段
+            futureHighLoadHours.push({ hour: i, kpt: futureKpt });
+        }
+    }
+    
+    for (let i = 0; i < hours.length; i++) {
+        const hour = hours[i];
+        const use = use_pred[i];
+        const pv = pv_pred[i];
+        const kpt = kpt_pred[i];
+        const rate = getElectricityRate(new Date(dateStr), hour);
+        
+        // 自放電損耗（確保不會低於最低安全水平）
+        batteryLevel *= (1 - selfDischargeRate);
+        batteryLevel = Math.max(batteryCapacity * minSafetyLevel, batteryLevel);
+        
+        let chargeAmount = 0;
+        let dischargeAmount = 0;
+        
+        // 策略：離峰時段充電，尖峰時段放電
+        if (rate <= 1.6) { // 離峰時段充電
+            const availableCapacity = batteryCapacity * maxSafetyLevel - batteryLevel; // 使用設定的安全邊際
+            const maxCharge = Math.min(maxChargeRate, availableCapacity);
+            
+            // 修正：先檢查契約容量限制，再決定充電量
+            const currentGridUsage = kpt; // 當前時段不考慮充放電的電網用電量
+            const availableChargeUnderContract = Math.max(0, contractCapacity - currentGridUsage);
+            chargeAmount = Math.min(maxCharge, availableChargeUnderContract);
+            
+            if (chargeAmount > 0) {
+                batteryLevel += chargeAmount * chargeEfficiency;
+            }
+        } else if (rate >= 3.0) { // 尖峰時段放電
+            // 確保放電不會讓電池低於最低安全水平
+            const maxAvailableDischarge = Math.max(0, batteryLevel - batteryCapacity * minSafetyLevel);
+            
+            // 修正：考慮未來高耗電時段，保留足夠電力應對
+            let reservedPower = 0;
+            const lookAheadHours = 6; // 向前看6小時
+            for (let j = i + 1; j < Math.min(i + lookAheadHours + 1, hours.length); j++) {
+                const futureKpt = kpt_pred[j];
+                if (futureKpt > contractCapacity) {
+                    const excessNeeded = futureKpt - contractCapacity;
+                    reservedPower = Math.max(reservedPower, excessNeeded);
+                }
+            }
+            
+            // 確保保留足夠電力應對未來高耗電時段
+            const minBatteryForFuture = batteryCapacity * minSafetyLevel + reservedPower;
+            const actualMaxDischarge = Math.max(0, batteryLevel - minBatteryForFuture);
+            const availableDischarge = Math.min(maxDischargeRate, actualMaxDischarge);
+            
+            dischargeAmount = Math.max(0, availableDischarge);
+            
+            if (dischargeAmount > 0) {
+                batteryLevel -= dischargeAmount / dischargeEfficiency;
+            }
+        }
+        
+        // 檢查是否需要緊急放電以避免超過契約容量
+        const gridUsageAmount = kpt + chargeAmount - dischargeAmount;
+        if (gridUsageAmount > contractCapacity) {
+            const excessAmount = gridUsageAmount - contractCapacity;
+            // 確保緊急放電不會讓電池低於最低安全水平
+            const maxEmergencyDischarge = Math.max(0, batteryLevel - batteryCapacity * minSafetyLevel);
+            const emergencyDischarge = Math.min(excessAmount, maxEmergencyDischarge);
+            
+            if (emergencyDischarge > 0) {
+                dischargeAmount += emergencyDischarge;
+                batteryLevel -= emergencyDischarge / dischargeEfficiency;
+                contractViolations.push({
+                    hour: hour,
+                    originalUsage: gridUsageAmount,
+                    emergencyDischarge: emergencyDischarge,
+                    finalUsage: gridUsageAmount - emergencyDischarge
+                });
+            }
+        }
+        
+        // 確保電池電量在安全範圍內（這是最後的保護機制）
+        batteryLevel = Math.max(batteryCapacity * minSafetyLevel, Math.min(batteryCapacity * maxSafetyLevel, batteryLevel));
+        
+        batteryLevels.push(batteryLevel);
+        chargeAmounts.push(chargeAmount);
+        dischargeAmounts.push(dischargeAmount);
+        gridUsage.push(kpt + chargeAmount - dischargeAmount);
+    }
+    
+    return {
+        batteryLevels,
+        chargeAmounts,
+        dischargeAmounts,
+        gridUsage,
+        contractViolations,
+        finalBatteryLevel: batteryLevel,
+        totalCharge: chargeAmounts.reduce((a, b) => a + b, 0),
+        totalDischarge: dischargeAmounts.reduce((a, b) => a + b, 0),
+        rateAnalysis
+    };
+}
+
+// 渲染蓄電池圖表
+function renderBatteryChart(hours, use_pred, pv_pred, kpt_pred, batteryData) {
+    if (batteryChart) batteryChart.destroy();
+    const ctx = document.getElementById('batteryChart').getContext('2d');
+    
+    // 動態調整 Y 軸範圍 - 只包含可見的數據
+    const visibleDataArrays = [];
+    if (chartLineSettings.use) visibleDataArrays.push(use_pred);
+    if (chartLineSettings.pv) visibleDataArrays.push(pv_pred);
+    if (chartLineSettings.kpt) visibleDataArrays.push(kpt_pred);
+    if (chartLineSettings.battery) visibleDataArrays.push(batteryData.batteryLevels);
+    if (chartLineSettings.charge) visibleDataArrays.push(batteryData.chargeAmounts);
+    if (chartLineSettings.discharge) visibleDataArrays.push(batteryData.dischargeAmounts);
+    if (chartLineSettings.grid) visibleDataArrays.push(batteryData.gridUsage);
+    if (chartLineSettings.contract) visibleDataArrays.push(new Array(hours.length).fill(batterySettings.contractCapacity));
+    
+    const yAxis = getAdjustedYAxis(visibleDataArrays);
+    
+    // 契約容量參考線
+    const contractCapacity = batterySettings.contractCapacity;
+    const contractLine = new Array(hours.length).fill(contractCapacity);
+    
+    // 建立數據集陣列
+    const datasets = [];
+    
+    if (chartLineSettings.use) {
+        datasets.push({
+            label: '預測耗電量 (use)',
+            data: use_pred,
+            borderColor: 'red',
+            fill: false
+        });
+    }
+    
+    if (chartLineSettings.pv) {
+        datasets.push({
+            label: '預測發電量 (pv)',
+            data: pv_pred,
+            borderColor: 'green',
+            fill: false
+        });
+    }
+    
+    if (chartLineSettings.kpt) {
+        datasets.push({
+            label: '預測 kpt',
+            data: kpt_pred,
+            borderColor: 'orange',
+            fill: false
+        });
+    }
+    
+    if (chartLineSettings.battery) {
+        datasets.push({
+            label: '蓄電池電量',
+            data: batteryData.batteryLevels,
+            borderColor: 'purple',
+            fill: false,
+            yAxisID: 'y1'
+        });
+    }
+    
+    if (chartLineSettings.charge) {
+        datasets.push({
+            label: '充電量',
+            data: batteryData.chargeAmounts,
+            borderColor: 'blue',
+            fill: false
+        });
+    }
+    
+    if (chartLineSettings.discharge) {
+        datasets.push({
+            label: '放電量',
+            data: batteryData.dischargeAmounts,
+            borderColor: 'brown',
+            fill: false
+        });
+    }
+    
+    if (chartLineSettings.grid) {
+        datasets.push({
+            label: '電網用電量',
+            data: batteryData.gridUsage,
+            borderColor: 'red',
+            borderDash: [3, 3],
+            fill: false
+        });
+    }
+    
+    if (chartLineSettings.contract) {
+        datasets.push({
+            label: '契約容量限制',
+            data: contractLine,
+            borderColor: 'blue',
+            borderDash: [5, 5],
+            fill: false,
+            pointRadius: 0
+        });
+    }
+    
+    batteryChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: hours,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: true } },
+            scales: {
+                x: { title: { display: true, text: 'Hour' } },
+                y: {
+                    title: { display: true, text: 'kWh' },
+                    min: yAxis.min,
+                    max: yAxis.max,
+                    ticks: { stepSize: 100 }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: { display: true, text: 'Battery Level (kWh)' },
+                    min: 0,
+                    max: 1260,
+                    grid: { drawOnChartArea: false }
+                }
+            },
+            onClick: function(event, elements) {
+                if (elements.length > 0) {
+                    const element = elements[0];
+                    const hourIndex = element.index;
+                    const hour = hours[hourIndex];
+                    showHourlyDetailData(hour, hourIndex, use_pred, pv_pred, kpt_pred, batteryData);
+                }
+            }
+        }
+    });
+}
+
+// 更新蓄電池狀態顯示
+function updateBatteryStatus(batteryData) {
+    const batteryLevel = batteryData.finalBatteryLevel;
+    const percentage = (batteryLevel / batterySettings.capacity) * 100;
+    
+    document.getElementById('battery-level').style.width = percentage + '%';
+    document.getElementById('battery-level').innerText = percentage.toFixed(1) + '%';
+    document.getElementById('battery-current').innerText = batteryLevel.toFixed(1);
+    
+    // 更新進度條顏色
+    const progressBar = document.getElementById('battery-level');
+    if (percentage < batterySettings.minSafetyLevel) {
+        progressBar.className = 'progress-bar bg-danger';
+    } else if (percentage < 50) {
+        progressBar.className = 'progress-bar bg-warning';
+    } else {
+        progressBar.className = 'progress-bar bg-success';
+    }
+}
+
+// 更新分析結果
+function updateBatteryAnalysis(batteryData, dateStr) {
+    const analysisDiv = document.getElementById('battery-analysis');
+    const totalCharge = batteryData.totalCharge;
+    const totalDischarge = batteryData.totalDischarge;
+    const finalLevel = batteryData.finalBatteryLevel;
+    const contractViolations = batteryData.contractViolations;
+    
+    let html = `
+        <div class="alert alert-success">
+            <h6>✅ 蓄電池策略分析完成</h6>
+            <p><strong>分析日期：</strong> ${dateStr}</p>
+            <p><strong>總充電量：</strong> ${totalCharge.toFixed(1)} kWh</p>
+            <p><strong>總放電量：</strong> ${totalDischarge.toFixed(1)} kWh</p>
+            <p><strong>最終電量：</strong> ${finalLevel.toFixed(1)} kWh (${((finalLevel/batterySettings.capacity)*100).toFixed(1)}%)</p>
+            <p><strong>契約容量違規：</strong> ${contractViolations.length} 次</p>
+        </div>
+        <p><strong>策略說明：</strong> 系統優先考慮契約容量限制，在離峰時段充電，尖峰時段放電，並在必要時進行緊急放電以避免超過785 kWh/小時的限制。</p>
+    `;
+    
+    if (contractViolations.length > 0) {
+        html += `
+            <div class="alert alert-warning mt-2">
+                <h6>⚠️ 緊急放電記錄</h6>
+                <p>系統進行了 ${contractViolations.length} 次緊急放電以避免超過契約容量：</p>
+                <ul>
+        `;
+        contractViolations.forEach(violation => {
+            html += `<li>${violation.hour}時：緊急放電 ${violation.emergencyDischarge.toFixed(1)} kWh</li>`;
+        });
+        html += `</ul></div>`;
+    }
+    
+    analysisDiv.innerHTML = html;
+}
+
+// 更新詳細分析結果
+function updateBatteryDetails(batteryData, dateStr) {
+    const detailsDiv = document.getElementById('battery-details');
+    const rateAnalysis = batteryData.rateAnalysis;
+    
+    let html = `
+        <div class="alert alert-info">
+            <h6><i class="fas fa-info-circle"></i> 詳細數據查詢</h6>
+            <p><small class="text-muted">點擊圖表上的數據點可查看該小時的詳細資訊，或查看下方的基本分析結果</small></p>
+        </div>
+        
+        <h6>日期：${dateStr}</h6>
+        <div class="row">
+            <div class="col-md-6">
+                <h6>電價時段分布</h6>
+                <ul>
+                    <li>尖峰時段：${rateAnalysis.peakHours.join(', ')} 時</li>
+                    <li>半尖峰時段：${rateAnalysis.halfPeakHours.join(', ')} 時</li>
+                    <li>離峰時段：${rateAnalysis.offPeakHours.join(', ')} 時</li>
+                </ul>
+            </div>
+            <div class="col-md-6">
+                <h6>蓄電池操作統計</h6>
+                <ul>
+                    <li>總充電量：${batteryData.totalCharge.toFixed(1)} kWh</li>
+                    <li>總放電量：${batteryData.totalDischarge.toFixed(1)} kWh</li>
+                    <li>淨充電量：${(batteryData.totalCharge - batteryData.totalDischarge).toFixed(1)} kWh</li>
+                    <li>最終電量：${batteryData.finalBatteryLevel.toFixed(1)} kWh</li>
+                </ul>
+            </div>
+        </div>
+    `;
+    
+    detailsDiv.innerHTML = html;
+}
+
+// 載入日期範圍數據
+function loadDateRangeData(startDate, endDate) {
+    fetch(`/real_data?start_date=${startDate}&end_date=${endDate}`)
+        .then(res => res.json())
+        .then(data => {
+            if (!data.success) {
+                alert('載入數據失敗：' + data.error);
+                return;
+            }
+            
+            // 組織數據
+            const organizedData = {};
+            data.results.forEach(item => {
+                if (!organizedData[item.date]) {
+                    organizedData[item.date] = [];
+                }
+                organizedData[item.date].push(item);
+            });
+            
+            // 對每個日期進行預測和蓄電池分析
+            const allDaysData = [];
+            const dates = Object.keys(organizedData).sort();
+            
+            // 追蹤前一天的電池電量，用於繼承
+            let previousDayBatteryLevel = Math.max(batterySettings.initialLevel, batterySettings.capacity * batterySettings.minSafetyLevel / 100);
+            
+            dates.forEach(date => {
+                const dayData = organizedData[date];
+                // 使用實際數據進行分析
+                const hours = dayData.map(d => d.hour);
+                const kpt_pred = dayData.map(d => d.actual_kpt);
+                const use_pred = dayData.map(d => d.actual_use); // 使用實際用電量
+                const pv_pred = dayData.map(d => d.actual_pv); // 使用實際發電量
+                
+                // 使用前一天的電池電量作為初始電量
+                const batteryData = analyzeBatteryStrategy(use_pred, pv_pred, kpt_pred, hours, date, previousDayBatteryLevel);
+                
+                // 更新前一天的電池電量為當前日期的最終電量
+                previousDayBatteryLevel = batteryData.finalBatteryLevel;
+                
+                allDaysData.push({
+                    date: date,
+                    hours: hours,
+                    use_pred: use_pred,
+                    pv_pred: pv_pred,
+                    kpt_pred: kpt_pred,
+                    batteryData: batteryData
+                });
+            });
+            
+            dateRangeData = allDaysData;
+            currentDayIndex = 0;
+            
+            // 顯示第一天數據
+            if (allDaysData.length > 0) {
+                showDayData(0);
+                updateNavigationButtons();
+            }
+        })
+        .catch(error => {
+            console.error('載入數據失敗:', error);
+            alert('載入數據失敗：' + error.message);
+        });
+}
+
+
+
+//```````
+function loadLastUploaded() {
+    fetch('/latest_upload')
+      .then(res => {
+        if (!res.ok) throw new Error('no latest upload');
+        return res.json();
+      })
+      .then(data => {
+        if (!data.success || !data.results || !data.results.length) return;
+
+        // --- Same structuring logic as loadDateRangeData ---
+        const organizedData = {};
+        data.results.forEach(item => {
+            if (!organizedData[item.date]) organizedData[item.date] = [];
+            organizedData[item.date].push(item);
+        });
+
+        const dates = Object.keys(organizedData).sort();
+
+        // Build dateRangeData so all existing UI works unchanged
+        dateRangeData = dates.map(date => {
+            const items = organizedData[date].sort((a, b) => a.hour - b.hour);
+            const hours    = items.map(d => d.hour);
+            const use_pred = items.map(d => d.use_pred);
+            const pv_pred  = items.map(d => d.pv_pred);
+            const kpt_pred = items.map(d => d.kpt_pred);
+
+            const batteryData = analyzeBatteryStrategy(
+                use_pred, pv_pred, kpt_pred, hours, date, batterySettings.initialLevel
+            );
+
+            return { date, hours, use_pred, pv_pred, kpt_pred, batteryData };
+        });
+
+        currentDayIndex = 0;
+        showDayData(0);
+        updateNavigationButtons();
+
+        // Optional: label the view so you know you're seeing the uploaded data
+        const label = document.getElementById('current-day-display');
+        if (label) label.innerText = `${dates[0]}（使用上傳資料）`;
+      })
+      .catch(() => {
+        // No uploaded data yet — that's fine, leave the page as-is.
+      });
+}
+//`````
+
+
+
+
+// 顯示指定日期的數據
+function showDayData(dayIndex) {
+    if (!dateRangeData || dayIndex < 0 || dayIndex >= dateRangeData.length) {
+        return;
+    }
+    
+    const dayData = dateRangeData[dayIndex];
+    currentDayIndex = dayIndex;
+    
+    // 更新圖表
+    renderBatteryChart(
+        dayData.hours,
+        dayData.use_pred,
+        dayData.pv_pred,
+        dayData.kpt_pred,
+        dayData.batteryData
+    );
+    
+    // 更新狀態和分析
+    updateBatteryStatus(dayData.batteryData);
+    updateBatteryAnalysis(dayData.batteryData, dayData.date);
+    updateBatteryDetails(dayData.batteryData, dayData.date);
+    
+    // 更新日期顯示
+    document.getElementById('current-day-display').innerText = `顯示日期：${dayData.date}`;
+    
+    // 顯示契約容量監控
+    const contractCheck = {
+        contract_capacity: batterySettings.contractCapacity,
+        total_power_usage: dayData.batteryData.gridUsage,
+        violations: dayData.batteryData.contractViolations.map(v => ({
+            hour: v.hour,
+            total_power: v.originalUsage,
+            excess: v.originalUsage - 785,
+            kpt: dayData.kpt_pred[v.hour],
+            charge: dayData.batteryData.chargeAmounts[v.hour],
+            discharge: dayData.batteryData.dischargeAmounts[v.hour],
+            use: dayData.use_pred[v.hour],
+            pv: dayData.pv_pred[v.hour]
+        })),
+        max_power: Math.max(...dayData.batteryData.gridUsage),
+        min_power: Math.min(...dayData.batteryData.gridUsage),
+        avg_power: dayData.batteryData.gridUsage.reduce((a, b) => a + b, 0) / dayData.batteryData.gridUsage.length
+    };
+    displayContractMonitor(contractCheck, 'battery-contract-monitor');
+}
+
+// 更新導航按鈕狀態
+function updateNavigationButtons() {
+    const prevBtn = document.getElementById('prev-day-btn');
+    const nextBtn = document.getElementById('next-day-btn');
+    const overviewBtn = document.getElementById('overview-btn');
+    
+    if (!dateRangeData) {
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        overviewBtn.disabled = true;
+        return;
+    }
+    
+    prevBtn.disabled = currentDayIndex <= 0;
+    nextBtn.disabled = currentDayIndex >= dateRangeData.length - 1;
+    overviewBtn.disabled = false;
+}
+
+// 設定管理函數
+function updateBatterySpecsDisplay() {
+    const capacity = batterySettings.capacity;
+    const minSafety = batterySettings.minSafetyLevel;
+    const maxSafety = batterySettings.maxSafetyLevel;
+    const minSafetyKwh = (capacity * minSafety / 100).toFixed(0);
+    const maxSafetyKwh = (capacity * maxSafety / 100).toFixed(0);
+    
+    document.getElementById('battery-capacity-display').innerText = capacity;
+    // 計算實際初始電量（系統會自動確保不低於最低安全水平）
+    const actualInitialLevel = Math.max(batterySettings.initialLevel, capacity * minSafety / 100);
+    const initialNote = batterySettings.initialLevel < capacity * minSafety / 100 ? 
+        `（系統自動調整為${actualInitialLevel.toFixed(0)}度以符合最低安全水平）` : 
+        `（符合最低安全水平）`;
+    document.getElementById('initial-level-display').innerText = `${batterySettings.initialLevel}度${initialNote}`;
+    
+    const specsHtml = `
+        <li>總容量：${capacity} kWh</li>
+        <li>安全範圍：${minSafetyKwh} - ${maxSafetyKwh} kWh (${minSafety}% - ${maxSafety}%)</li>
+        <li>最大充電功率：${batterySettings.maxChargeRate} kWh/小時</li>
+        <li>最大放電功率：${batterySettings.maxDischargeRate} kWh/小時</li>
+        <li>充電效率：${batterySettings.chargeEfficiency}%（充電無損耗）</li>
+        <li>放電效率：${batterySettings.dischargeEfficiency}%（${100 - batterySettings.dischargeEfficiency}%放電損耗）</li>
+        <li>自放電損耗：${batterySettings.selfDischargeRate}%/小時</li>
+        <li><strong style='color:blue'>契約容量限制：${batterySettings.contractCapacity} kWh/小時</strong></li>
+        <li><strong style='color:red'>策略：優先避免超過契約容量</strong></li>
+        <li><strong style='color:green'>電池電量繼承：多日分析時，前一天的結束電量會作為下一天的起始電量</strong></li>
+    `;
+    
+    document.getElementById('battery-specs-display').innerHTML = specsHtml;
+}
+
+function applySettings() {
+    // 從輸入欄位讀取設定值
+    batterySettings.capacity = parseFloat(document.getElementById('battery-capacity').value);
+    batterySettings.maxChargeRate = parseFloat(document.getElementById('max-charge-rate').value);
+    batterySettings.maxDischargeRate = parseFloat(document.getElementById('max-discharge-rate').value);
+    batterySettings.chargeEfficiency = parseFloat(document.getElementById('charge-efficiency').value);
+    batterySettings.dischargeEfficiency = parseFloat(document.getElementById('discharge-efficiency').value);
+    batterySettings.selfDischargeRate = parseFloat(document.getElementById('self-discharge-rate').value);
+    batterySettings.minSafetyLevel = parseFloat(document.getElementById('min-safety-level').value);
+    batterySettings.maxSafetyLevel = parseFloat(document.getElementById('max-safety-level').value);
+    batterySettings.initialLevel = parseFloat(document.getElementById('initial-battery-level').value);
+    batterySettings.contractCapacity = parseFloat(document.getElementById('contract-capacity').value);
+    
+    // 驗證設定
+    if (batterySettings.minSafetyLevel >= batterySettings.maxSafetyLevel) {
+        alert('最小安全電量必須小於最大安全電量');
+        return;
+    }
+    
+    if (batterySettings.initialLevel > batterySettings.capacity) {
+        alert('初始電量不能超過總容量');
+        return;
+    }
+    
+    // 提醒用戶關於最低安全水平的自動調整
+    if (batterySettings.initialLevel < batterySettings.capacity * batterySettings.minSafetyLevel / 100) {
+        const actualInitialLevel = batterySettings.capacity * batterySettings.minSafetyLevel / 100;
+        alert(`注意：初始電量${batterySettings.initialLevel}度低於最低安全水平${actualInitialLevel.toFixed(0)}度，系統將自動調整為${actualInitialLevel.toFixed(0)}度。`);
+    }
+    
+    // 提醒用戶關於電池電量繼承
+    alert('注意：在多日分析中，前一天的結束電量會自動作為下一天的起始電量，確保電池電量的連續性。');
+    
+    // 更新顯示
+    updateBatterySpecsDisplay();
+    
+    // 如果已有數據，重新分析
+    if (dateRangeData) {
+        showDayData(currentDayIndex);
+    }
+    
+    alert('設定已套用！');
+}
+
+function resetSettings() {
+    // 重置為預設值
+    batterySettings = {
+        capacity: 1260,
+        maxChargeRate: 200,
+        maxDischargeRate: 200,
+        chargeEfficiency: 100,
+        dischargeEfficiency: 90,
+        selfDischargeRate: 0.03,
+        minSafetyLevel: 10,
+        maxSafetyLevel: 90,
+        initialLevel: 0,
+        contractCapacity: 785
+    };
+    
+    // 更新輸入欄位
+    document.getElementById('battery-capacity').value = batterySettings.capacity;
+    document.getElementById('max-charge-rate').value = batterySettings.maxChargeRate;
+    document.getElementById('max-discharge-rate').value = batterySettings.maxDischargeRate;
+    document.getElementById('charge-efficiency').value = batterySettings.chargeEfficiency;
+    document.getElementById('discharge-efficiency').value = batterySettings.dischargeEfficiency;
+    document.getElementById('self-discharge-rate').value = batterySettings.selfDischargeRate;
+    document.getElementById('min-safety-level').value = batterySettings.minSafetyLevel;
+    document.getElementById('max-safety-level').value = batterySettings.maxSafetyLevel;
+    document.getElementById('initial-battery-level').value = batterySettings.initialLevel;
+    document.getElementById('contract-capacity').value = batterySettings.contractCapacity;
+    
+    // 更新顯示
+    updateBatterySpecsDisplay();
+    
+    // 如果已有數據，重新分析
+    if (dateRangeData) {
+        showDayData(currentDayIndex);
+    }
+    
+    alert('設定已重置為預設值！');
+}
+
+// 線段顯示設定相關函數
+function updateChartLineSettings() {
+    // 更新全域設定
+    chartLineSettings.use = document.getElementById('show-use').checked;
+    chartLineSettings.pv = document.getElementById('show-pv').checked;
+    chartLineSettings.kpt = document.getElementById('show-kpt').checked;
+    chartLineSettings.battery = document.getElementById('show-battery').checked;
+    chartLineSettings.charge = document.getElementById('show-charge').checked;
+    chartLineSettings.discharge = document.getElementById('show-discharge').checked;
+    chartLineSettings.grid = document.getElementById('show-grid').checked;
+    chartLineSettings.contract = document.getElementById('show-contract').checked;
+    
+    // 儲存到 localStorage
+    localStorage.setItem('chartLineSettings', JSON.stringify(chartLineSettings));
+    
+    // 重新渲染圖表
+    if (dateRangeData && currentDayIndex < dateRangeData.length) {
+        const dayData = dateRangeData[currentDayIndex];
+        renderBatteryChart(
+            dayData.hours,
+            dayData.use_pred,
+            dayData.pv_pred,
+            dayData.kpt_pred,
+            dayData.batteryData
+        );
+    }
+}
+
+function loadChartLineSettings() {
+    // 從 localStorage 載入設定
+    const savedSettings = localStorage.getItem('chartLineSettings');
+    if (savedSettings) {
+        chartLineSettings = JSON.parse(savedSettings);
+    }
+    
+    // 更新 checkbox 狀態
+    document.getElementById('show-use').checked = chartLineSettings.use;
+    document.getElementById('show-pv').checked = chartLineSettings.pv;
+    document.getElementById('show-kpt').checked = chartLineSettings.kpt;
+    document.getElementById('show-battery').checked = chartLineSettings.battery;
+    document.getElementById('show-charge').checked = chartLineSettings.charge;
+    document.getElementById('show-discharge').checked = chartLineSettings.discharge;
+    document.getElementById('show-grid').checked = chartLineSettings.grid;
+    document.getElementById('show-contract').checked = chartLineSettings.contract;
+}
+
+function selectAllLines() {
+    Object.keys(chartLineSettings).forEach(key => {
+        chartLineSettings[key] = true;
+    });
+    
+    // 更新所有 checkbox
+    document.querySelectorAll('#chartLinesMenu input[type="checkbox"]').forEach(checkbox => {
+        checkbox.checked = true;
+    });
+    
+    updateChartLineSettings();
+}
+
+
+loadLastUploaded();
+
+function deselectAllLines() {
+    Object.keys(chartLineSettings).forEach(key => {
+        chartLineSettings[key] = false;
+    });
+    
+    // 更新所有 checkbox
+    document.querySelectorAll('#chartLinesMenu input[type="checkbox"]').forEach(checkbox => {
+        checkbox.checked = false;
+    });
+    
+    updateChartLineSettings();
+}
+
+// 事件處理器
+document.addEventListener('DOMContentLoaded', function() {
+    // 初始化顯示
+    updateBatterySpecsDisplay();
+    
+    // 載入線段顯示設定
+    loadChartLineSettings();
+    
+    // 套用設定按鈕
+    document.getElementById('apply-settings-btn').addEventListener('click', applySettings);
+    
+    // 重置設定按鈕
+    document.getElementById('reset-settings-btn').addEventListener('click', resetSettings);
+    
+    // 分析時間區間按鈕
+    document.getElementById('battery-query-btn').addEventListener('click', function() {
+        const startDate = document.getElementById('battery-start-date').value;
+        const endDate = document.getElementById('battery-end-date').value;
+        
+        if (!startDate || !endDate) {
+            alert('請選擇開始和結束日期');
+            return;
+        }
+        
+        if (startDate > endDate) {
+            alert('開始日期不能晚於結束日期');
+            return;
+        }
+        
+        loadDateRangeData(startDate, endDate);
+    });
+    
+    // 前一天按鈕
+    document.getElementById('prev-day-btn').addEventListener('click', function() {
+        if (currentDayIndex > 0) {
+            showDayData(currentDayIndex - 1);
+            updateNavigationButtons();
+        }
+    });
+    
+    // 後一天按鈕
+    document.getElementById('next-day-btn').addEventListener('click', function() {
+        if (currentDayIndex < dateRangeData.length - 1) {
+            showDayData(currentDayIndex + 1);
+            updateNavigationButtons();
+        }
+    });
+    
+    // 總體視圖按鈕
+    document.getElementById('overview-btn').addEventListener('click', function() {
+        if (!dateRangeData) return;
+        
+        // 合併所有日期的數據
+        const combinedData = combineDateRangeData(dateRangeData);
+        
+        // 顯示總體分析
+        renderBatteryChart(
+            combinedData.hours,
+            combinedData.use_pred,
+            combinedData.pv_pred,
+            combinedData.kpt_pred,
+            combinedData.batteryData
+        );
+        
+        document.getElementById('current-day-display').innerText = '總體視圖';
+        
+        // 更新分析結果
+        updateBatteryAnalysis(combinedData.batteryData, '總體分析');
+        updateBatteryDetails(combinedData.batteryData, '總體分析');
+        
+        // 顯示總體契約容量監控
+        displayContractMonitor(combinedData.contractCheck, 'battery-contract-monitor');
+    });
+    
+    // 線段顯示設定事件監聽器
+    document.querySelectorAll('#chartLinesMenu input[type="checkbox"]').forEach(checkbox => {
+        checkbox.addEventListener('change', updateChartLineSettings);
+    });
+    
+    // 全選按鈕
+    document.getElementById('select-all-lines').addEventListener('click', function(e) {
+        e.preventDefault();
+        selectAllLines();
+    });
+    
+    // 全不選按鈕
+    document.getElementById('deselect-all-lines').addEventListener('click', function(e) {
+        e.preventDefault();
+        deselectAllLines();
+    });
+    
+    // 防止下拉選單項目點擊時關閉選單，但允許 checkbox 事件正常處理
+    document.querySelectorAll('#chartLinesMenu .dropdown-item').forEach(item => {
+        item.addEventListener('click', function(e) {
+            // 如果點擊的是 checkbox 或其標籤，不阻止事件傳播
+            if (e.target.type === 'checkbox' || e.target.tagName === 'INPUT') {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+        });
+    });
+});
+
+// 合併日期範圍數據
+function combineDateRangeData(allDaysData) {
+    const allHours = [];
+    const allUsePred = [];
+    const allPvPred = [];
+    const allKptPred = [];
+    const allBatteryLevels = [];
+    const allChargeAmounts = [];
+    const allDischargeAmounts = [];
+    const allGridUsage = [];
+    const allContractViolations = [];
+    
+    allDaysData.forEach(dayData => {
+        allHours.push(...dayData.hours);
+        allUsePred.push(...dayData.use_pred);
+        allPvPred.push(...dayData.pv_pred);
+        allKptPred.push(...dayData.kpt_pred);
+        allBatteryLevels.push(...dayData.batteryData.batteryLevels);
+        allChargeAmounts.push(...dayData.batteryData.chargeAmounts);
+        allDischargeAmounts.push(...dayData.batteryData.dischargeAmounts);
+        allGridUsage.push(...dayData.batteryData.gridUsage);
+        allContractViolations.push(...dayData.batteryData.contractViolations);
+    });
+    
+    const combinedBatteryData = {
+        batteryLevels: allBatteryLevels,
+        chargeAmounts: allChargeAmounts,
+        dischargeAmounts: allDischargeAmounts,
+        gridUsage: allGridUsage,
+        contractViolations: allContractViolations,
+        finalBatteryLevel: allBatteryLevels[allBatteryLevels.length - 1],
+        totalCharge: allChargeAmounts.reduce((a, b) => a + b, 0),
+        totalDischarge: allDischargeAmounts.reduce((a, b) => a + b, 0),
+        rateAnalysis: { rates: [], rateTypes: [], peakHours: [], halfPeakHours: [], offPeakHours: [] }
+    };
+    
+    const contractCheck = {
+        contract_capacity: batterySettings.contractCapacity,
+        total_power_usage: allGridUsage,
+        violations: allContractViolations.map(v => ({
+            hour: v.hour,
+            total_power: v.originalUsage,
+            excess: v.originalUsage - 785,
+            kpt: allKptPred[v.hour],
+            charge: allChargeAmounts[v.hour],
+            discharge: allDischargeAmounts[v.hour],
+            use: allUsePred[v.hour],
+            pv: allPvPred[v.hour]
+        })),
+        max_power: Math.max(...allGridUsage),
+        min_power: Math.min(...allGridUsage),
+        avg_power: allGridUsage.reduce((a, b) => a + b, 0) / allGridUsage.length
+    };
+    
+    return {
+        hours: allHours,
+        use_pred: allUsePred,
+        pv_pred: allPvPred,
+        kpt_pred: allKptPred,
+        batteryData: combinedBatteryData,
+        contractCheck: contractCheck
+    };
+}
+
+// 切換蓄電池參數設定顯示/隱藏
+function toggleBatterySettings() {
+    const body = document.getElementById('battery-settings-body');
+    const icon = document.getElementById('battery-settings-icon');
+    
+    if (body.style.display === 'none') {
+        body.style.display = 'block';
+        icon.className = 'fas fa-chevron-up';
+    } else {
+        body.style.display = 'none';
+        icon.className = 'fas fa-chevron-down';
+    }
+}
+
+// 顯示特定小時的詳細數據
+function showHourlyDetailData(hour, hourIndex, use_pred, pv_pred, kpt_pred, batteryData) {
+    const detailsDiv = document.getElementById('battery-details');
+    
+    // 確保詳細分析結果區域是展開的
+    const body = document.getElementById('detailed-results-body');
+    const icon = document.getElementById('detailed-results-icon');
+    if (body.style.display === 'none') {
+        body.style.display = 'block';
+        icon.className = 'fas fa-chevron-up';
+    }
+    
+    const use = use_pred[hourIndex];
+    const pv = pv_pred[hourIndex];
+    const kpt = kpt_pred[hourIndex];
+    const batteryLevel = batteryData.batteryLevels[hourIndex];
+    const charge = batteryData.chargeAmounts[hourIndex];
+    const discharge = batteryData.dischargeAmounts[hourIndex];
+    const gridUsage = batteryData.gridUsage[hourIndex];
+    const contractCapacity = batterySettings.contractCapacity;
+    
+    // 計算電價時段
+    let rateType = '離峰';
+    let rate = 2.1;
+    if (hour >= 8 && hour <= 22) {
+        if (hour >= 16 && hour <= 22) {
+            rateType = '尖峰';
+            rate = 4.2;
+        } else {
+            rateType = '半尖峰';
+            rate = 3.1;
+        }
+    }
+    
+    // 計算契約容量狀態
+    const contractStatus = gridUsage > contractCapacity ? '違規' : '正常';
+    const contractExcess = gridUsage > contractCapacity ? (gridUsage - contractCapacity).toFixed(1) : '0';
+    
+    let html = `
+        <div class="alert alert-info">
+            <h6><i class="fas fa-clock"></i> ${hour}時 詳細數據</h6>
+            <p><small class="text-muted">點擊圖表上的數據點可查看該小時的詳細資訊</small></p>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <h6>基本用電數據</h6>
+                <table class="table table-sm">
+                    <tr><td>預測耗電量 (use)</td><td class="text-end"><span class="text-danger">${use.toFixed(1)} kWh</span></td></tr>
+                    <tr><td>預測發電量 (pv)</td><td class="text-end"><span class="text-success">${pv.toFixed(1)} kWh</span></td></tr>
+                    <tr><td>淨負載 (kpt)</td><td class="text-end"><span class="text-warning">${kpt.toFixed(1)} kWh</span></td></tr>
+                    <tr><td>電價時段</td><td class="text-end">${rateType} (${rate} 元/kWh)</td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h6>蓄電池狀態</h6>
+                <table class="table table-sm">
+                    <tr><td>蓄電池電量</td><td class="text-end">${batteryLevel.toFixed(1)} kWh (${((batteryLevel/batterySettings.capacity)*100).toFixed(1)}%)</td></tr>
+                    <tr><td>充電量</td><td class="text-end"><span class="text-primary">${charge.toFixed(1)} kWh</span></td></tr>
+                    <tr><td>放電量</td><td class="text-end"><span class="text-info">${discharge.toFixed(1)} kWh</span></td></tr>
+                </table>
+            </div>
+        </div>
+        
+        <div class="row mt-3">
+            <div class="col-md-6">
+                <h6>電網用電分析</h6>
+                <table class="table table-sm">
+                    <tr><td>電網用電量</td><td class="text-end">${gridUsage.toFixed(1)} kWh</td></tr>
+                    <tr><td>契約容量限制</td><td class="text-end">${contractCapacity} kWh</td></tr>
+                    <tr><td>契約容量狀態</td><td class="text-end">
+                        <span class="badge ${contractStatus === '違規' ? 'bg-danger' : 'bg-success'}">${contractStatus}</span>
+                    </td></tr>
+                    ${contractStatus === '違規' ? `<tr><td>超出限制</td><td class="text-end text-danger">${contractExcess} kWh</td></tr>` : ''}
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h6>成本分析</h6>
+                <table class="table table-sm">
+                    <tr><td>電網用電成本</td><td class="text-end">${(gridUsage * rate).toFixed(1)} 元</td></tr>
+                    <tr><td>充電成本</td><td class="text-end">${(charge * rate).toFixed(1)} 元</td></tr>
+                    <tr><td>放電節省</td><td class="text-end text-success">${(discharge * rate).toFixed(1)} 元</td></tr>
+                </table>
+            </div>
+        </div>
+    `;
+    
+    detailsDiv.innerHTML = html;
+}
+
+// 切換詳細分析結果顯示/隱藏
+function toggleDetailedResults() {
+    const body = document.getElementById('detailed-results-body');
+    const icon = document.getElementById('detailed-results-icon');
+    
+    if (body.style.display === 'none') {
+        body.style.display = 'block';
+        icon.className = 'fas fa-chevron-up';
+    } else {
+        body.style.display = 'none';
+        icon.className = 'fas fa-chevron-down';
+    }
+}
+</script>
+</body>
+</html> 

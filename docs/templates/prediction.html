@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>用電預測 - 智慧能源監控平台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .chart-container { min-height: 400px; }
+        .nav-link.active { background-color: #007bff !important; color: white !important; }
+    </style>
+</head>
+<body>
+<div class="container py-4">
+    <h1 class="mb-4">智慧能源監控平台</h1>
+    
+    <!-- 導航欄 -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+        <div class="container-fluid">
+            <span class="navbar-brand">功能選單</span>
+            <div class="navbar-nav">
+                <a class="nav-link active" href="/prediction">用電預測</a>
+                <a class="nav-link" href="/history">歷史查詢</a>
+                <a class="nav-link" href="/battery">蓄電池管理</a>
+                <a class="nav-link" href="/upload">資料上傳預測</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="alert alert-info">
+        <ul>
+            <li>本系統預測三條線：<b style='color:red'>耗電量 (use)</b>、<b style='color:green'>發電量 (pv)</b>、<b style='color:orange'>淨負載 (kpt = use - pv)</b>。</li>
+            <li>發電量 (pv) 僅用天氣與小時預測，夜間自動為 0。</li>
+            <li>所有預測均經過對應 AI 模型 (xgb_use.json, xgb_pv.json)。</li>
+            <li><b style='color:blue'>契約容量限制：785 kWh/小時</b> - 每小時從電網購電量不能超過此限制。</li>
+        </ul>
+    </div>
+
+    <!-- 契約容量監控 -->
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5>契約容量監控</h5>
+                </div>
+                <div class="card-body">
+                    <div id="contract-monitor">
+                        <p class="text-muted">載入中...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 圖表區域 -->
+    <div class="chart-container">
+        <canvas id="latestKptChart"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// 全域變數
+let latestKptChart = null;
+
+// 動態調整 Y 軸範圍的函數
+function getAdjustedYAxis(dataArrays) {
+    const allData = dataArrays.flat();
+    const minVal = Math.min(...allData);
+    const maxVal = Math.max(...allData);
+    
+    // 預設範圍
+    let yMin = -100;
+    let yMax = 800;
+    
+    // 如果數據超出範圍，則調整
+    if (minVal < -100) {
+        yMin = Math.floor(minVal / 100) * 100 - 100;
+    }
+    if (maxVal > 800) {
+        yMax = Math.ceil(maxVal / 100) * 100 + 100;
+    }
+    
+    return { min: yMin, max: yMax };
+}
+
+// 契約容量監控顯示函數
+function displayContractMonitor(contractCheck, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    if (!contractCheck) {
+        container.innerHTML = '<p class="text-muted">無契約容量資料</p>';
+        return;
+    }
+    
+    const { contract_capacity, total_power_usage, violations, max_power, min_power, avg_power } = contractCheck;
+    
+    let html = `
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>契約容量</h6>
+                        <h4 class="text-primary">${contract_capacity} kWh</h4>
+                        <small class="text-muted">每小時限制</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>最大用電</h6>
+                        <h4 class="${max_power > contract_capacity ? 'text-danger' : 'text-success'}">${max_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">${max_power > contract_capacity ? '⚠️ 超過限制' : '✅ 符合限制'}</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-info">
+                    <div class="card-body text-center">
+                        <h6>平均用電</h6>
+                        <h4 class="text-info">${avg_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時平均</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-warning">
+                    <div class="card-body text-center">
+                        <h6>最小用電</h6>
+                        <h4 class="text-warning">${min_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時最低</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    if (violations.length > 0) {
+        html += `
+            <div class="alert alert-danger mt-3">
+                <h6>⚠️ 契約容量違規警告</h6>
+                <p>發現 ${violations.length} 個小時超過契約容量限制：</p>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>小時</th>
+                                <th>總用電量 (kWh)</th>
+                                <th>超出量 (kWh)</th>
+                                <th>kpt (kWh)</th>
+                                <th>充電量 (kWh)</th>
+                                <th>放電量 (kWh)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        
+        violations.forEach(violation => {
+            html += `
+                <tr>
+                    <td>${violation.hour}時</td>
+                    <td><strong class="text-danger">${violation.total_power.toFixed(1)}</strong></td>
+                    <td><strong class="text-danger">+${violation.excess.toFixed(1)}</strong></td>
+                    <td>${violation.kpt.toFixed(1)}</td>
+                    <td>${violation.charge.toFixed(1)}</td>
+                    <td>${violation.discharge.toFixed(1)}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="alert alert-success mt-3">
+                <h6>✅ 契約容量符合</h6>
+                <p>所有小時的用電量都在契約容量限制內，最大用電量為 ${max_power.toFixed(1)} kWh。</p>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
+// 用電預測圖表
+function renderLatestKptChart(hours, use_pred, kpt_pred, pv_pred) {
+    if (latestKptChart) latestKptChart.destroy();
+    const ctx = document.getElementById('latestKptChart').getContext('2d');
+    
+    // 動態調整 Y 軸範圍
+    const yAxis = getAdjustedYAxis([use_pred, kpt_pred, pv_pred]);
+    
+    // 契約容量參考線
+    const contractCapacity = 785;
+    const contractLine = new Array(hours.length).fill(contractCapacity);
+    
+    latestKptChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: hours,
+            datasets: [
+                {
+                    label: '預測耗電量 (use)',
+                    data: use_pred,
+                    borderColor: 'red',
+                    fill: false
+                },
+                {
+                    label: '預測發電量 (pv)',
+                    data: pv_pred,
+                    borderColor: 'green',
+                    fill: false
+                },
+                {
+                    label: '預測 kpt',
+                    data: kpt_pred,
+                    borderColor: 'orange',
+                    fill: false
+                },
+                {
+                    label: '契約容量限制',
+                    data: contractLine,
+                    borderColor: 'blue',
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: true } },
+            scales: {
+                x: { title: { display: true, text: 'Hour' } },
+                y: {
+                    title: { display: true, text: 'kWh' },
+                    min: yAxis.min,
+                    max: yAxis.max,
+                    ticks: { stepSize: 100 }
+                }
+            }
+        }
+    });
+}
+
+// 載入用電預測圖表
+function loadLatestKpt() {
+    fetch('/latest_predict')
+        .then(res => res.json())
+        .then(data => {
+            renderLatestKptChart(data.hours, data.use_pred, data.kpt_pred, data.pv_pred);
+            // 顯示契約容量監控
+            if (data.contract_check) {
+                displayContractMonitor(data.contract_check, 'contract-monitor');
+            }
+        });
+}
+
+// 頁面載入時自動載入用電預測
+document.addEventListener('DOMContentLoaded', function() {
+    loadLatestKpt();
+});
+</script>
+</body>
+</html> 

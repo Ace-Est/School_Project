@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>資料上傳預測 - 智慧能源監控平台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .chart-container { min-height: 400px; }
+        .nav-link.active { background-color: #007bff !important; color: white !important; }
+        .upload-area { 
+            border: 2px dashed #ccc; 
+            border-radius: 8px; 
+            padding: 40px; 
+            text-align: center; 
+            margin: 20px 0;
+            transition: border-color 0.3s;
+        }
+        .upload-area:hover { border-color: #007bff; }
+        .upload-area.dragover { border-color: #007bff; background-color: #f8f9fa; }
+        .results-table { margin-top: 20px; }
+        .download-btn { margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div class="container py-4">
+    <h1 class="mb-4">智慧能源監控平台</h1>
+    
+    <!-- 導航欄 -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+        <div class="container-fluid">
+            <span class="navbar-brand">功能選單</span>
+            <div class="navbar-nav">
+                <a class="nav-link" href="/prediction">用電預測</a>
+                <a class="nav-link" href="/history">歷史查詢</a>
+                <a class="nav-link" href="/battery">蓄電池管理</a>
+                <a class="nav-link active" href="/upload">資料上傳預測</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="alert alert-info">
+        <ul>
+            <li>本系統預測三條線：<b style='color:red'>耗電量 (use)</b>、<b style='color:green'>發電量 (pv)</b>、<b style='color:orange'>淨負載 (kpt = use - pv)</b>。</li>
+            <li>發電量 (pv) 僅用天氣與小時預測，夜間自動為 0。</li>
+            <li>上傳資料只需天氣、時間等特徵，不需有 kpt、pv、use 欄位。</li>
+            <li>所有預測均經過對應 AI 模型 (xgb_use.json, xgb_pv.json)。</li>
+            <li><b style='color:blue'>契約容量限制：785 kWh/小時</b> - 每小時從電網購電量不能超過此限制。</li>
+        </ul>
+    </div>
+
+    <!-- 上傳區域 -->
+    <div class="row">
+        <div class="col-md-6">
+            <h5>上傳資料檔案</h5>
+            <div class="upload-area" id="upload-area">
+                <div class="mb-3">
+                    <i class="fas fa-cloud-upload-alt" style="font-size: 3rem; color: #ccc;"></i>
+                </div>
+                <p class="text-muted">拖拽 CSV 檔案到此處或點擊選擇檔案</p>
+                <input type="file" id="file-input" accept=".csv" style="display: none;">
+                <button class="btn btn-outline-primary" onclick="document.getElementById('file-input').click()">
+                    選擇檔案
+                </button>
+            </div>
+            <div class="mb-3">
+                <h6>檔案格式要求：</h6>
+                <ul class="text-muted">
+                    <li>CSV 格式檔案</li>
+                    <li>必要欄位：Date, Temperature, Humidity, Rain, Hour</li>
+                    <li>可選欄位：day_week（若無會自動計算）、kpt（僅供對照，不影響預測）、label（若無則自動設預設值）</li>
+                    <li>不需上傳 pv/use 欄位，系統會自動預測</li>
+                </ul>
+            </div>
+            <div class="mb-3">
+                <button class="btn btn-primary" id="upload-btn" disabled>開始預測</button>
+                <div id="upload-status" class="mt-2"></div>
+            </div>
+            
+            <!-- 日曆選擇器 -->
+            <div class="mt-4">
+                <h6>選擇查看日期</h6>
+                <div class="row">
+                    <div class="col-md-8">
+                        <label for="upload-date-picker" class="form-label">日期：</label>
+                        <input type="date" id="upload-date-picker" class="form-control">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">&nbsp;</label>
+                        <button class="btn btn-outline-primary d-block w-100" id="change-date-btn" disabled>切換日期</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <h5>預測結果</h5>
+            <div id="upload-results">
+                <p class="text-muted">請先上傳檔案進行預測</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 契約容量監控 -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5>契約容量監控</h5>
+                </div>
+                <div class="card-body">
+                    <div id="upload-contract-monitor">
+                        <p class="text-muted">請先上傳檔案進行預測</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 圖表區域 -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="chart-container">
+                <canvas id="uploadKptChart"></canvas>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 預測結果表格 -->
+    <div class="row mt-3">
+        <div class="col-12">
+            <div id="upload-results-table" class="results-table" style="display: none;">
+                <h6>預測結果</h6>
+                <div class="table-responsive">
+                    <table class="table table-striped table-sm">
+                        <thead>
+                            <tr>
+                                <th>日期</th>
+                                <th>小時</th>
+                                <th>預測 use</th>
+                                <th>預測 pv</th>
+                                <th>預測 kpt</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-tbody">
+                        </tbody>
+                    </table>
+                </div>
+                <button class="btn btn-success download-btn" id="download-csv-btn">下載預測結果 (CSV)</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://kit.fontawesome.com/a076d05399.js"></script>
+<script>
+// 全域變數
+let uploadKptChart = null;
+let uploadedFile = null;
+let predictionResults = null;
+let allPredictionResults = null; // 保存所有上傳的數據
+
+// 動態調整 Y 軸範圍的函數
+function getAdjustedYAxis(dataArrays) {
+    const allData = dataArrays.flat();
+    const minVal = Math.min(...allData);
+    const maxVal = Math.max(...allData);
+    
+    // 預設範圍
+    let yMin = -100;
+    let yMax = 800;
+    
+    // 如果數據超出範圍，則調整
+    if (minVal < -100) {
+        yMin = Math.floor(minVal / 100) * 100 - 100;
+    }
+    if (maxVal > 800) {
+        yMax = Math.ceil(maxVal / 100) * 100 + 100;
+    }
+    
+    return { min: yMin, max: yMax };
+}
+
+// 契約容量監控顯示函數
+function displayContractMonitor(contractCheck, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    if (!contractCheck) {
+        container.innerHTML = '<p class="text-muted">無契約容量資料</p>';
+        return;
+    }
+    
+    const { contract_capacity, total_power_usage, violations, max_power, min_power, avg_power } = contractCheck;
+    
+    let html = `
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>契約容量</h6>
+                        <h4 class="text-primary">${contract_capacity} kWh</h4>
+                        <small class="text-muted">每小時限制</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>最大用電</h6>
+                        <h4 class="${max_power > contract_capacity ? 'text-danger' : 'text-success'}">${max_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">${max_power > contract_capacity ? '⚠️ 超過限制' : '✅ 符合限制'}</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-info">
+                    <div class="card-body text-center">
+                        <h6>平均用電</h6>
+                        <h4 class="text-info">${avg_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時平均</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-warning">
+                    <div class="card-body text-center">
+                        <h6>最小用電</h6>
+                        <h4 class="text-warning">${min_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時最低</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    if (violations.length > 0) {
+        html += `
+            <div class="alert alert-danger mt-3">
+                <h6>⚠️ 契約容量違規警告</h6>
+                <p>發現 ${violations.length} 個小時超過契約容量限制：</p>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>小時</th>
+                                <th>總用電量 (kWh)</th>
+                                <th>超出量 (kWh)</th>
+                                <th>kpt (kWh)</th>
+                                <th>充電量 (kWh)</th>
+                                <th>放電量 (kWh)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        
+        violations.forEach(violation => {
+            html += `
+                <tr>
+                    <td>${violation.hour}時</td>
+                    <td><strong class="text-danger">${violation.total_power.toFixed(1)}</strong></td>
+                    <td><strong class="text-danger">+${violation.excess.toFixed(1)}</strong></td>
+                    <td>${violation.kpt.toFixed(1)}</td>
+                    <td>${violation.charge.toFixed(1)}</td>
+                    <td>${violation.discharge.toFixed(1)}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="alert alert-success mt-3">
+                <h6>✅ 契約容量符合</h6>
+                <p>所有小時的用電量都在契約容量限制內，最大用電量為 ${max_power.toFixed(1)} kWh。</p>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
+// 檔案上傳相關功能
+function setupFileUpload() {
+    const uploadArea = document.getElementById('upload-area');
+    const fileInput = document.getElementById('file-input');
+    const uploadBtn = document.getElementById('upload-btn');
+    const uploadStatus = document.getElementById('upload-status');
+
+    // 拖拽上傳
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('dragover');
+    });
+
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.classList.remove('dragover');
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleFileSelect(files[0]);
+        }
+    });
+
+    // 點擊上傳
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
+
+    // 上傳按鈕
+    uploadBtn.addEventListener('click', uploadAndPredict);
+}
+
+function handleFileSelect(file) {
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+        alert('請選擇 CSV 檔案');
+        return;
+    }
+
+    uploadedFile = file;
+    document.getElementById('upload-btn').disabled = false;
+    document.getElementById('upload-status').innerHTML = `
+        <div class="alert alert-info">
+            <strong>已選擇檔案：</strong> ${file.name}<br>
+            <small>檔案大小：${(file.size / 1024).toFixed(2)} KB</small>
+        </div>
+    `;
+}
+
+function uploadAndPredict() {
+    
+    const formData = new FormData();
+    formData.append('file', uploadedFile);
+
+    const uploadBtn = document.getElementById('upload-btn');
+    const uploadStatus = document.getElementById('upload-status');
+
+    uploadBtn.disabled = true;
+    uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 預測中...';
+    uploadStatus.innerHTML = '<div class="alert alert-warning">正在進行預測，請稍候...</div>';
+
+    fetch('/upload_predict', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        
+        predictionResults = data.results;
+        displayPredictionResults(data);
+        uploadStatus.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+    })
+    .catch(error => {
+        console.error('預測失敗:', error);
+        uploadStatus.innerHTML = `<div class="alert alert-danger">預測失敗：${error.message}</div>`;
+    })
+    .finally(() => {
+        uploadBtn.disabled = false;
+        uploadBtn.innerHTML = '開始預測';
+    });
+}
+
+function displayPredictionResults(data) {
+    const resultsDiv = document.getElementById('upload-results');
+    const resultsTable = document.getElementById('upload-results-table');
+    const tbody = document.getElementById('results-tbody');
+
+    // 檢查是否有實際 kpt 數據
+    const hasActual = data.results.some(r => r.actual_kpt !== undefined);
+    
+    // 保存所有數據
+    allPredictionResults = data.results;
+    predictionResults = data.results;
+    
+    // 顯示基本結果
+    resultsDiv.innerHTML = `
+        <div class="alert alert-success">
+            <h6>預測完成！</h6>
+            <p>總共處理 ${data.results.length} 筆資料</p>
+            <p>預測範圍：${data.results[0].date} 到 ${data.results[data.results.length-1].date}</p>
+            <p>包含實際值：${hasActual ? '是' : '否'}</p>
+        </div>
+    `;
+
+    // 設定日期選擇器的可用日期
+    const dates = [...new Set(data.results.map(r => r.date))];
+    const datePicker = document.getElementById('upload-date-picker');
+    if (dates.length > 0) {
+        datePicker.min = dates[0];
+        datePicker.max = dates[dates.length - 1];
+        datePicker.value = dates[0]; // 預設選擇第一個日期
+        document.getElementById('change-date-btn').disabled = false;
+    }
+
+    // 顯示詳細表格
+    updateResultsTable(data.results);
+    resultsTable.style.display = 'block';
+
+    // 更新圖表
+    updateUploadChart();
+
+    // 設定下載按鈕
+    setupDownloadButton(data.results);
+    
+    // 顯示契約容量監控
+    if (data.contract_check) {
+        displayContractMonitor(data.contract_check, 'upload-contract-monitor');
+    }
+}
+
+
+function updateUploadChart() {
+    if (!predictionResults) return;
+    if (uploadKptChart) uploadKptChart.destroy();
+    const ctx = document.getElementById('uploadKptChart').getContext('2d');
+    const hours = predictionResults.map(r => r.hour);
+    const use_pred = predictionResults.map(r => r.use_pred);
+    const pv_pred = predictionResults.map(r => r.pv_pred);
+    const kpt_pred = predictionResults.map(r => r.kpt_pred);
+    
+    // 動態調整 Y 軸範圍
+    const yAxis = getAdjustedYAxis([use_pred, pv_pred, kpt_pred]);
+    
+    // 契約容量參考線
+    const contractCapacity = 785;
+    const contractLine = new Array(hours.length).fill(contractCapacity);
+    
+    let datasets = [
+        {
+            label: '預測耗電量 (use)',
+            data: use_pred,
+            borderColor: 'red',
+            fill: false
+        },
+        {
+            label: '預測發電量 (pv)',
+            data: pv_pred,
+            borderColor: 'green',
+            fill: false
+        },
+        {
+            label: '預測 kpt',
+            data: kpt_pred,
+            borderColor: 'orange',
+            fill: false
+        },
+        {
+            label: '契約容量限制',
+            data: contractLine,
+            borderColor: 'blue',
+            borderDash: [5, 5],
+            fill: false,
+            pointRadius: 0
+        }
+    ];
+    uploadKptChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: hours,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: true },
+                title: { display: true, text: '上傳資料預測結果' }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Hour' },
+                    min: 0,
+                    max: 23
+                },
+                y: {
+                    title: { display: true, text: 'kWh' },
+                    min: yAxis.min,
+                    max: yAxis.max,
+                    ticks: { stepSize: 100 }
+                }
+            }
+        }
+    });
+}
+
+function setupDownloadButton(results) {
+    document.getElementById('download-csv-btn').onclick = function() {
+        // 建立 CSV 內容
+        const csvContent = [
+            'Date,Hour,Temperature,Humidity,Rain,day_week,Predicted_use,Predicted_pv,Predicted_kpt',
+            ...results.map(r => `${r.date},${r.hour},${r.temperature},${r.humidity},${r.rain},${r.day_week},${r.use_pred},${r.pv_pred},${r.kpt_pred}`)
+        ].join('\n');
+        // 建立下載連結
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'prediction_results.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+}
+
+// 日期選擇器相關功能
+function setupDateSelector() {
+    const uploadDatePicker = document.getElementById('upload-date-picker');
+    const changeDateBtn = document.getElementById('change-date-btn');
+    
+    uploadDatePicker.addEventListener('change', function() {
+        changeDateBtn.disabled = false;
+    });
+
+    changeDateBtn.addEventListener('click', function() {
+        const selectedDate = uploadDatePicker.value;
+        if (!selectedDate || !allPredictionResults) {
+            alert('請先選擇日期');
+            return;
+        }
+        
+        // 從所有數據中過濾選定日期的數據
+        const filteredResults = allPredictionResults.filter(r => r.date === selectedDate);
+        
+        if (filteredResults.length === 0) {
+            alert('選定日期沒有數據');
+            return;
+        }
+        
+        // 更新當前顯示的數據
+        predictionResults = filteredResults;
+        updateUploadChart();
+        updateResultsTable(filteredResults);
+    });
+}
+
+function updateResultsTable(results) {
+    const tbody = document.getElementById('results-tbody');
+    tbody.innerHTML = '';
+    results.forEach(result => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${result.date}</td>
+            <td>${result.hour}</td>
+            <td><strong style='color:red'>${result.use_pred}</strong></td>
+            <td><strong style='color:green'>${result.pv_pred}</strong></td>
+            <td><strong style='color:orange'>${result.kpt_pred}</strong></td>
+        `;
+    });
+}
+
+
+// 頁面載入時初始化
+document.addEventListener('DOMContentLoaded', function() {
+    setupFileUpload();
+    setupDateSelector();
+});
+</script>
+</body>
+</html> 

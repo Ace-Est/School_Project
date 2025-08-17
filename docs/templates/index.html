@@ -31,6 +31,7 @@
             <li>發電量 (pv) 僅用天氣與小時預測，夜間自動為 0。</li>
             <li>上傳資料只需天氣、時間等特徵，不需有 kpt、pv、use 欄位。</li>
             <li>所有預測均經過對應 AI 模型 (xgb_use.json, xgb_pv.json)。</li>
+            <li><b style='color:blue'>契約容量限制：785 kWh/小時</b> - 每小時從電網購電量不能超過此限制。</li>
         </ul>
     </div>
     <ul class="nav nav-tabs" id="mainTab" role="tablist">
@@ -49,6 +50,20 @@
     </ul>
     <div class="tab-content" id="mainTabContent">
         <div class="tab-pane fade show active" id="kpt" role="tabpanel">
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>契約容量監控</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="contract-monitor">
+                                <p class="text-muted">載入中...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="chart-container">
                 <canvas id="latestKptChart"></canvas>
             </div>
@@ -58,6 +73,20 @@
                 <label for="history-date-picker" class="form-label">選擇日期：</label>
                 <input type="date" id="history-date-picker" class="form-control" style="max-width:200px;display:inline-block;">
                 <button class="btn btn-primary ms-2" id="history-query-btn">查詢</button>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>契約容量監控</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="history-contract-monitor">
+                                <p class="text-muted">請選擇日期進行查詢</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="chart-container">
                 <canvas id="historyKptChart"></canvas>
@@ -134,6 +163,8 @@
                                     <li>充電效率：100%（充電無損耗）</li>
                                     <li>放電效率：90%（10%放電損耗）</li>
                                     <li>自放電損耗：0.03%/小時</li>
+                                    <li><strong style='color:blue'>契約容量限制：785 kWh/小時</strong></li>
+                                    <li><strong style='color:red'>策略：優先避免超過契約容量</strong></li>
                                 </ul>
                             </div>
                         </div>
@@ -151,6 +182,23 @@
                         </div>
                     </div>
                 </div>
+            </div>
+            
+            <!-- 契約容量監控 -->
+            <div class="row mt-3">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>契約容量監控（蓄電池策略後）</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="battery-contract-monitor">
+                                <p class="text-muted">請選擇日期範圍進行分析</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             </div>
             <div class="row mt-4">
                 <div class="col-12">
@@ -234,6 +282,22 @@
                 </div>
             </div>
             
+            <!-- 契約容量監控 -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5>契約容量監控</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="upload-contract-monitor">
+                                <p class="text-muted">請先上傳檔案進行預測</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
             <!-- 圖表區域 -->
             <div class="row mt-4">
                 <div class="col-12">
@@ -305,6 +369,126 @@ function getAdjustedYAxis(dataArrays) {
     return { min: yMin, max: yMax };
 }
 
+// 契約容量監控顯示函數
+function displayContractMonitor(contractCheck, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    if (!contractCheck) {
+        container.innerHTML = '<p class="text-muted">無契約容量資料</p>';
+        return;
+    }
+    
+    const { contract_capacity, total_power_usage, violations, max_power, min_power, avg_power } = contractCheck;
+    
+    // 判斷是否為蓄電池策略後的監控
+    const isBatteryStrategy = containerId === 'battery-contract-monitor';
+    
+    let html = `
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>契約容量</h6>
+                        <h4 class="text-primary">${contract_capacity} kWh</h4>
+                        <small class="text-muted">每小時限制</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card ${max_power > contract_capacity ? 'border-danger' : 'border-success'}">
+                    <div class="card-body text-center">
+                        <h6>最大用電</h6>
+                        <h4 class="${max_power > contract_capacity ? 'text-danger' : 'text-success'}">${max_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">${max_power > contract_capacity ? '⚠️ 超過限制' : '✅ 符合限制'}</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-info">
+                    <div class="card-body text-center">
+                        <h6>平均用電</h6>
+                        <h4 class="text-info">${avg_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時平均</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card border-warning">
+                    <div class="card-body text-center">
+                        <h6>最小用電</h6>
+                        <h4 class="text-warning">${min_power.toFixed(1)} kWh</h4>
+                        <small class="text-muted">24小時最低</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    if (violations.length > 0) {
+        html += `
+            <div class="alert alert-danger mt-3">
+                <h6>⚠️ 契約容量違規警告</h6>
+                <p>發現 ${violations.length} 個小時超過契約容量限制：</p>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>小時</th>
+                                <th>總用電量 (kWh)</th>
+                                <th>超出量 (kWh)</th>
+                                <th>kpt (kWh)</th>
+                                <th>充電量 (kWh)</th>
+                                <th>放電量 (kWh)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        
+        violations.forEach(violation => {
+            html += `
+                <tr>
+                    <td>${violation.hour}時</td>
+                    <td><strong class="text-danger">${violation.total_power.toFixed(1)}</strong></td>
+                    <td><strong class="text-danger">+${violation.excess.toFixed(1)}</strong></td>
+                    <td>${violation.kpt.toFixed(1)}</td>
+                    <td>${violation.charge.toFixed(1)}</td>
+                    <td>${violation.discharge.toFixed(1)}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="alert alert-success mt-3">
+                <h6>✅ 契約容量符合</h6>
+                <p>所有小時的用電量都在契約容量限制內，最大用電量為 ${max_power.toFixed(1)} kWh。</p>
+                ${isBatteryStrategy ? '<p><strong>蓄電池策略已成功避免超過契約容量限制。</strong></p>' : ''}
+            </div>
+        `;
+    }
+    
+    // 如果是蓄電池策略，加入特別說明
+    if (isBatteryStrategy) {
+        html += `
+            <div class="alert alert-info mt-3">
+                <h6>🔋 蓄電池策略說明</h6>
+                <p><strong>契約容量優先：</strong> 蓄電池策略優先考慮契約容量限制，避免超過785 kWh/小時。</p>
+                <p><strong>緊急處理：</strong> 當預測會超過契約容量時，系統會強制放電以降低電網用電量。</p>
+                <p><strong>智能調節：</strong> 在離峰時段充電時會檢查是否會超過契約容量，必要時減少充電量。</p>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
 // 用電預測圖表
 function renderLatestKptChart(hours, use_pred, kpt_pred, pv_pred) {
     if (latestKptChart) latestKptChart.destroy();
@@ -312,6 +496,10 @@ function renderLatestKptChart(hours, use_pred, kpt_pred, pv_pred) {
     
     // 動態調整 Y 軸範圍
     const yAxis = getAdjustedYAxis([use_pred, kpt_pred, pv_pred]);
+    
+    // 契約容量參考線
+    const contractCapacity = 785;
+    const contractLine = new Array(hours.length).fill(contractCapacity);
     
     latestKptChart = new Chart(ctx, {
         type: 'line',
@@ -335,6 +523,14 @@ function renderLatestKptChart(hours, use_pred, kpt_pred, pv_pred) {
                     data: kpt_pred,
                     borderColor: 'orange',
                     fill: false
+                },
+                {
+                    label: '契約容量限制',
+                    data: contractLine,
+                    borderColor: 'blue',
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
                 }
             ]
         },
@@ -360,6 +556,10 @@ function renderHistoryKptChart(hours, actual_use, actual_kpt, actual_pv, use_pre
     
     // 動態調整 Y 軸範圍
     const yAxis = getAdjustedYAxis([actual_use, actual_kpt, actual_pv, use_pred, kpt_pred, pv_pred]);
+    
+    // 契約容量參考線
+    const contractCapacity = 785;
+    const contractLine = new Array(hours.length).fill(contractCapacity);
     
     historyKptChart = new Chart(ctx, {
         type: 'line',
@@ -404,6 +604,14 @@ function renderHistoryKptChart(hours, actual_use, actual_kpt, actual_pv, use_pre
                     data: kpt_pred,
                     borderColor: 'orange',
                     fill: false
+                },
+                {
+                    label: '契約容量限制',
+                    data: contractLine,
+                    borderColor: 'blue',
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
                 }
             ]
         },
@@ -423,7 +631,7 @@ function renderHistoryKptChart(hours, actual_use, actual_kpt, actual_pv, use_pre
     });
 }
 
-// 蓄電池分析函數 - 支持日期範圍
+// 蓄電池分析函數 - 支持日期範圍，加入契約容量考量
 function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, initialBatteryLevel = 0) {
     // 分析當天電價時段分布
     const dailyRates = analyzeDailyRates(dateStr);
@@ -432,6 +640,7 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
     const maxDischargeRate = 200; // 最大放電功率
     const dischargeEfficiency = 0.9; // 放電效率
     const selfDischargeRate = 0.0003; // 自放電損耗 0.03%
+    const contractCapacity = 785; // 契約容量限制
     
     let batteryLevel = initialBatteryLevel; // 使用傳入的初始電量
     const batteryLevels = [batteryLevel];
@@ -440,6 +649,7 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
     const selfDischargeAmounts = [];
     const gridUsage = [];
     const savings = [];
+    const contractViolations = []; // 契約容量違規記錄
     
     // 計算各時段電價
     const rates = hours.map(hour => {
@@ -463,7 +673,7 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
         const minBatteryLevel = batteryCapacity * 0.1; // 最低保持10%
         const maxBatteryLevel = batteryCapacity * 0.9; // 最高不超過90%
         
-        // 計算自放電損耗（每小時5%）
+        // 計算自放電損耗（每小時0.03%）
         const selfDischarge = batteryLevel * selfDischargeRate;
         batteryLevel = Math.max(0, batteryLevel - selfDischarge); // 確保不會變成負數
         selfDischargeAmounts.push(selfDischarge);
@@ -471,15 +681,25 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
         // 檢查是否為假日（週六、週日）
         const isWeekendDay = isWeekend(dateStr);
         
-        // 智能蓄電池策略 - 優先保留給尖峰時段
+        // 契約容量優先策略：先檢查是否會超過契約容量
+        const potentialGridUsage = kpt + chargeAmount - dischargeAmount;
+        
+        // 智能蓄電池策略 - 優先避免超過契約容量
         if (rate <= 1.8 && batteryLevel < maxBatteryLevel) {
             // 離峰時段（1.58元）：充電到90%，為尖峰時段做準備
             const targetLevel = batteryCapacity * 0.9;
             if (batteryLevel < targetLevel) {
                 const neededCharge = targetLevel - batteryLevel;
-                chargeAmount = Math.min(neededCharge, maxChargeRate);
-                batteryLevel += chargeAmount;
-                gridUsageAmount = kpt + chargeAmount;
+                const maxPossibleCharge = Math.min(neededCharge, maxChargeRate);
+                
+                // 檢查充電後是否會超過契約容量
+                const chargeAfterContract = Math.min(maxPossibleCharge, contractCapacity - kpt);
+                chargeAmount = Math.max(0, chargeAfterContract);
+                
+                if (chargeAmount > 0) {
+                    batteryLevel += chargeAmount;
+                    gridUsageAmount = kpt + chargeAmount;
+                }
             }
         } else if (rate >= 5.0 && batteryLevel > 0) {
             // 尖峰時段（5.8元）：優先使用蓄電池，最大化節省
@@ -508,6 +728,27 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
             }
         }
         
+        // 契約容量緊急處理：如果仍然超過契約容量，強制放電
+        if (gridUsageAmount > contractCapacity && batteryLevel > 0) {
+            const excessAmount = gridUsageAmount - contractCapacity;
+            const neededDischarge = excessAmount / dischargeEfficiency;
+            const actualDischarge = Math.min(batteryLevel, neededDischarge);
+            const effectiveDischarge = actualDischarge * dischargeEfficiency;
+            
+            dischargeAmount += effectiveDischarge;
+            batteryLevel -= actualDischarge;
+            gridUsageAmount = kpt + chargeAmount - dischargeAmount;
+            
+            // 記錄契約容量違規處理
+            contractViolations.push({
+                hour: i,
+                originalGridUsage: kpt + chargeAmount,
+                finalGridUsage: gridUsageAmount,
+                emergencyDischarge: effectiveDischarge,
+                excessReduced: excessAmount - (gridUsageAmount - contractCapacity)
+            });
+        }
+        
         // 最後一天的最後一小時：清空蓄電池，不留電
         if (isLastDay && i === hours.length - 1 && batteryLevel > 0) {
             // 強制清空所有剩餘電量
@@ -516,7 +757,7 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
             
             dischargeAmount += finalEffectiveDischarge;
             batteryLevel = 0; // 完全清空
-            gridUsageAmount = kpt - finalEffectiveDischarge;
+            gridUsageAmount = kpt + chargeAmount - dischargeAmount;
             hourSavings += finalEffectiveDischarge * rate;
         }
         
@@ -556,6 +797,22 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
     // 計算剩餘電量（如果沒有完全清空）
     const remainingBatteryLevel = batteryLevel;
     
+    // 契約容量檢查
+    const contractCheck = {
+        contract_capacity: contractCapacity,
+        total_power_usage: gridUsage,
+        violations: contractViolations.map(v => ({
+            hour: v.hour,
+            total_power: v.originalGridUsage,
+            excess: v.originalGridUsage - contractCapacity,
+            emergency_discharge: v.emergencyDischarge,
+            excess_reduced: v.excessReduced
+        })),
+        max_power: Math.max(...gridUsage),
+        min_power: Math.min(...gridUsage),
+        avg_power: gridUsage.reduce((sum, val) => sum + val, 0) / gridUsage.length
+    };
+    
     return {
         batteryLevels: batteryLevels.slice(0, -1), // 移除最後一個值
         chargeAmounts,
@@ -579,7 +836,9 @@ function analyzeBatteryStrategy(hours, kpt_pred, dateStr, isLastDay = false, ini
         totalBatteryDischarge, // 實際從蓄電池放出的電量
         remainingBatteryLevel, // 剩餘電量
         dailyRates, // 當天電價時段分析
-        finalBatteryLevel: batteryLevel
+        finalBatteryLevel: batteryLevel,
+        contractCheck, // 契約容量檢查結果
+        contractViolations // 契約容量違規處理記錄
     };
 }
 
@@ -665,13 +924,17 @@ function renderBatteryChart(hours, kpt_pred, batteryData) {
         const ctx = document.getElementById('batteryChart').getContext('2d');
         
         // 動態調整 Y 軸範圍
-        const yAxis = getAdjustedYAxis([kpt_pred, batteryData.batteryLevels]);
+        const yAxis = getAdjustedYAxis([kpt_pred, batteryData.batteryLevels, batteryData.gridUsage]);
         
         // 判斷是否為單日顯示
         const isSingleDay = hours.length <= 24;
         const xAxisTitle = isSingleDay ? 'Hour' : 'Time';
         const xAxisMin = isSingleDay ? 0 : undefined;
         const xAxisMax = isSingleDay ? 23 : undefined;
+        
+        // 契約容量參考線
+        const contractCapacity = 785;
+        const contractLine = new Array(hours.length).fill(contractCapacity);
         
         batteryChart = new Chart(ctx, {
             type: 'line',
@@ -690,6 +953,21 @@ function renderBatteryChart(hours, kpt_pred, batteryData) {
                         borderColor: 'blue',
                         backgroundColor: 'rgba(0, 123, 255, 0.1)',
                         fill: true
+                    },
+                    {
+                        label: '電網用電量',
+                        data: batteryData.gridUsage,
+                        borderColor: 'red',
+                        borderDash: [3, 3],
+                        fill: false
+                    },
+                    {
+                        label: '契約容量限制',
+                        data: contractLine,
+                        borderColor: 'blue',
+                        borderDash: [5, 5],
+                        fill: false,
+                        pointRadius: 0
                     },
                     {
                         label: '充電量',
@@ -816,6 +1094,10 @@ function loadLatestKpt() {
         .then(res => res.json())
         .then(data => {
             renderLatestKptChart(data.hours, data.use_pred, data.kpt_pred, data.pv_pred);
+            // 顯示契約容量監控
+            if (data.contract_check) {
+                displayContractMonitor(data.contract_check, 'contract-monitor');
+            }
         });
 }
 // 歷史查詢分頁查詢
@@ -979,6 +1261,11 @@ function displayPredictionResults(data) {
 
     // 設定下載按鈕
     setupDownloadButton(data.results);
+    
+    // 顯示契約容量監控
+    if (data.contract_check) {
+        displayContractMonitor(data.contract_check, 'upload-contract-monitor');
+    }
 }
 
 function updateUploadChart() {
@@ -992,6 +1279,10 @@ function updateUploadChart() {
     
     // 動態調整 Y 軸範圍
     const yAxis = getAdjustedYAxis([use_pred, pv_pred, kpt_pred]);
+    
+    // 契約容量參考線
+    const contractCapacity = 785;
+    const contractLine = new Array(hours.length).fill(contractCapacity);
     
     let datasets = [
         {
@@ -1011,6 +1302,14 @@ function updateUploadChart() {
             data: kpt_pred,
             borderColor: 'orange',
             fill: false
+        },
+        {
+            label: '契約容量限制',
+            data: contractLine,
+            borderColor: 'blue',
+            borderDash: [5, 5],
+            fill: false,
+            pointRadius: 0
         }
     ];
     uploadKptChart = new Chart(ctx, {
@@ -1082,6 +1381,10 @@ document.getElementById('history-query-btn').onclick = function() {
                 data.pv_pred
             );
             renderBillSummary(data.hours, data.actual_kpt, date);
+            // 顯示契約容量監控
+            if (data.contract_check) {
+                displayContractMonitor(data.contract_check, 'history-contract-monitor');
+            }
         });
 };
 
@@ -1225,6 +1528,11 @@ async function analyzeDateRange(startDate, endDate) {
         renderBatteryChart(combinedData.allHours, combinedData.allKptPred, combinedData);
         updateBatteryDetails(combinedData.allHours, combinedData, `${startDate} 到 ${endDate}`);
         
+        // 顯示契約容量監控
+        if (combinedData.contractCheck) {
+            displayContractMonitor(combinedData.contractCheck, 'battery-contract-monitor');
+        }
+        
         // 啟用切換按鈕並顯示當前日期
         updateDayNavigation();
         
@@ -1259,7 +1567,9 @@ function combineDateRangeData(allData) {
         batteryElectricityCost: 0,
         totalLoss: 0,
         totalSavingsAmount: 0,
-        finalBatteryLevel: 0
+        finalBatteryLevel: 0,
+        contractCheck: null,
+        contractViolations: []
     };
     
     // 合併所有日期的數據
@@ -1296,6 +1606,14 @@ function combineDateRangeData(allData) {
         // 最後一天的電量
         if (dayIndex === allData.length - 1) {
             combined.finalBatteryLevel = batteryData.finalBatteryLevel;
+        }
+        
+        // 合併契約容量相關數據
+        if (batteryData.contractCheck) {
+            combined.contractCheck = batteryData.contractCheck;
+        }
+        if (batteryData.contractViolations) {
+            combined.contractViolations.push(...batteryData.contractViolations);
         }
     });
     
@@ -1347,6 +1665,11 @@ function showDayData(dayIndex) {
     // 更新詳細分析顯示單日數據
     updateBatteryDetails(dayData.hours, dayData.batteryData, dayData.date);
     
+    // 顯示契約容量監控
+    if (dayData.batteryData.contractCheck) {
+        displayContractMonitor(dayData.batteryData.contractCheck, 'battery-contract-monitor');
+    }
+    
     // 更新導航狀態
     updateDayNavigation();
     
@@ -1383,6 +1706,11 @@ document.getElementById('overview-btn').onclick = function() {
     
     renderBatteryChart(combinedData.allHours, combinedData.allKptPred, combinedData);
     updateBatteryDetails(combinedData.allHours, combinedData, `${startDate} 到 ${endDate}`);
+    
+    // 顯示契約容量監控
+    if (combinedData.contractCheck) {
+        displayContractMonitor(combinedData.contractCheck, 'battery-contract-monitor');
+    }
     
     // 更新顯示狀態
     document.getElementById('current-day-display').textContent = `總體視圖：${startDate} 到 ${endDate} (時間區間分析)`;
@@ -1579,6 +1907,7 @@ function updateBatteryAnalysis(batteryData) {
             <p class="text-dark"><strong>放電效率：</strong> 90% (10%放電損耗)</p>
             <p class="text-dark"><strong>能量平衡：</strong> 充電量 = 實際放電量 + 自放電損耗 + 剩餘電量 ${safeValue(batteryData.remainingBatteryLevel) > 0 ? '⚠️' : '✓'}</p>
             <p class="text-dark"><strong>智能策略：</strong> 優先保留電量給尖峰時段(5.8元)，半尖峰時段(3.63元)僅使用30%電量</p>
+            <p class="text-dark"><strong>契約容量策略：</strong> 優先避免超過785 kWh/小時限制，必要時強制放電</p>
             <p class="text-dark"><strong>時間區間：</strong> 從開始日期到結束日期，繼承前一天的剩餘電量，最後一天清空電量</p>
         </div>
         

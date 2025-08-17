@@ -1,6 +1,7 @@
 import os
 import pandas as pd
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify,redirect, url_for,send_from_directory
+
 import xgboost as xgb
 from werkzeug.utils import secure_filename
 import tempfile
@@ -12,9 +13,13 @@ DATA_PATH = os.path.join(BASE_DIR, "hourly_aggregated.csv")
 # 移除 xgb_model.json 相關程式碼，只保留 xgb_kpt.json
 # MODEL_PATH = os.path.join(BASE_DIR, "xgb_model.json")
 
+# 契約容量設定 (kWh/小時)
+CONTRACT_CAPACITY = 785  # 契約容量為 785 kWh/小時
+
 # 全域變數
 _df = None
 _model = None
+latest_upload_payload = None
 
 # 僅載入 use 與 pv 兩個模型
 use_model = None
@@ -66,9 +71,104 @@ def get_features(df, target="use"):
         features = ['avg_temperature', 'avg_humidity', 'rain_percent', 'weekday', 'hour', 'label']
     return features_df[features]
 
+# 契約容量檢查函數
+def check_contract_capacity(use_pred, pv_pred, kpt_pred, battery_charge=None, battery_discharge=None):
+    """
+    檢查每小時的總用電量是否超過契約容量
+    總用電量 = 購電量 + 消耗 - 放電 - 發電量
+    其中：購電量 = kpt + 充電量 - 放電量
+    """
+    contract_violations = []
+    total_power_usage = []
+    
+    # 初始化蓄電池參數
+    if battery_charge is None:
+        battery_charge = [0] * len(use_pred)
+    if battery_discharge is None:
+        battery_discharge = [0] * len(use_pred)
+    
+    for i, (use, pv, kpt) in enumerate(zip(use_pred, pv_pred, kpt_pred)):
+        # 計算總用電量（從電網購電）
+        # 總用電量 = kpt + 充電量 - 放電量
+        charge = battery_charge[i] if i < len(battery_charge) else 0
+        discharge = battery_discharge[i] if i < len(battery_discharge) else 0
+        
+        total_power = kpt + charge - discharge
+        
+        total_power_usage.append(total_power)
+        
+        # 檢查是否超過契約容量
+        if total_power > CONTRACT_CAPACITY:
+            contract_violations.append({
+                'hour': i,
+                'total_power': total_power,
+                'excess': total_power - CONTRACT_CAPACITY,
+                'kpt': kpt,
+                'charge': charge,
+                'discharge': discharge,
+                'use': use,
+                'pv': pv
+            })
+    
+    return {
+        'contract_capacity': CONTRACT_CAPACITY,
+        'total_power_usage': total_power_usage,
+        'violations': contract_violations,
+        'max_power': max(total_power_usage) if total_power_usage else 0,
+        'min_power': min(total_power_usage) if total_power_usage else 0,
+        'avg_power': sum(total_power_usage) / len(total_power_usage) if total_power_usage else 0
+    }
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("prediction.html")
+
+@app.route("/prediction")
+def prediction():
+    return render_template("prediction.html")
+
+@app.route("/history")
+def history():
+    return render_template("history.html")
+
+@app.route("/battery")
+def battery():
+    return render_template("battery.html")
+
+UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+# Keep track of the latest uploaded file
+latest_file = None
+
+@app.route("/upload", methods=["GET", "POST"])
+def upload_file():
+    global latest_file
+    if request.method == "POST":
+        file = request.files.get("file")
+        if file and file.filename:
+            # Delete old file if it exists
+            if latest_file:
+                try:
+                    os.remove(os.path.join(app.config["UPLOAD_FOLDER"], latest_file))
+                except FileNotFoundError:
+                    pass
+            # Save new file
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], file.filename))
+            latest_file = file.filename
+            return redirect(url_for("history"))
+    return render_template("upload.html")
+
+# --- Serve uploaded files ---
+@app.route("/uploads/<filename>")
+def uploaded_file(filename):
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+# --- Make latest_file available in all templates ---
+@app.context_processor
+def inject_latest_file():
+    return dict(latest_file=latest_file)
 
 @app.route("/dates")
 def get_dates():
@@ -107,11 +207,16 @@ def latest_predict():
         pv_pred = [max(0, float(v)) for v in pv_pred]
         kpt_pred = [float(v) - float(pv_pred[i]) for i, v in enumerate(use_pred)]
         hours = last_24["Hour"].tolist()
+        
+        # 檢查契約容量
+        contract_check = check_contract_capacity(use_pred, pv_pred, kpt_pred)
+        
         return jsonify({
             "hours": hours,
             "use_pred": [round(float(v), 2) for v in use_pred],
             "kpt_pred": [round(float(v), 2) for v in kpt_pred],
-            "pv_pred": [round(float(v), 2) for v in pv_pred]
+            "pv_pred": [round(float(v), 2) for v in pv_pred],
+            "contract_check": contract_check
         })
     except Exception as e:
         import traceback
@@ -148,6 +253,10 @@ def predict():
         actual_use = [round(float(v), 2) for v in (day_data["kpt"] + day_data["pv"]).tolist()]
         actual_kpt = [round(float(v), 2) for v in day_data["kpt"].tolist()]
         actual_pv = [round(float(v), 2) for v in day_data["pv"].tolist()]
+        
+        # 檢查契約容量
+        contract_check = check_contract_capacity(use_pred, pv_pred, kpt_pred)
+        
         return jsonify({
             "hours": hours,
             "actual_use": actual_use,
@@ -155,7 +264,8 @@ def predict():
             "actual_pv": actual_pv,
             "use_pred": [round(float(v), 2) for v in use_pred],
             "kpt_pred": [round(float(v), 2) for v in kpt_pred],
-            "pv_pred": [round(float(v), 2) for v in pv_pred]
+            "pv_pred": [round(float(v), 2) for v in pv_pred],
+            "contract_check": contract_check
         })
     except Exception as e:
         import traceback
@@ -206,7 +316,9 @@ def get_real_data():
                 "humidity": float(row["Humidity"]),
                 "rain": float(row["Rain"]),
                 "day_week": int(row["day_week"]),
-                "actual_kpt": float(row["kpt"])
+                "actual_kpt": float(row["kpt"]),
+                "actual_pv": float(row["pv"]),
+                "actual_use": float(row["use"])
             })
         
         print(f"真實資料查詢 {start_str} 到 {end_str}: 回傳 {len(results)} 筆資料")
@@ -252,7 +364,43 @@ def upload_predict():
         # 將 pv 負值設為 0
         pv_pred = [max(0, float(v)) for v in pv_pred]
         kpt_pred = [float(v) - float(pv_pred[i]) for i, v in enumerate(use_pred)]
+        
+        # 檢查契約容量
+        contract_check = check_contract_capacity(use_pred, pv_pred, kpt_pred)
         results = []
+
+
+        #-------
+        # Persist the uploaded file and cache the latest predictions
+        global latest_upload_payload, latest_file
+        try:
+            # make sure we can re-read the uploaded stream (we read it once for pandas)
+            file.stream.seek(0)
+
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            save_as = 'latest.csv'
+            save_path = os.path.join(app.config['UPLOAD_FOLDER'], save_as)
+
+            # replace the old saved file
+            try:
+                os.remove(save_path)
+            except FileNotFoundError:
+                pass
+
+            file.save(save_path)
+            latest_file = save_as
+        except Exception as save_err:
+            # This isn't fatal for predictions; just log it
+            print(f"Warning: failed to persist uploaded file: {save_err}")
+
+        # Cache predictions for other pages
+        latest_upload_payload = {
+            "results": results,
+            "contract_check": contract_check
+        }
+        #--------
+
+        
         for i, row in uploaded_df.iterrows():
             results.append({
                 "date": row["Date_str"],
@@ -264,15 +412,32 @@ def upload_predict():
         return jsonify({
             "success": True,
             "message": f"成功預測 {len(results)} 筆資料",
-            "results": results
+            "results": results,
+            "contract_check": contract_check
         })
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"error": f"伺服器錯誤: {str(e)}"}), 500
 
+#Add a small endpoint so any page (including battery.html) can fetch the last upload:
+@app.route("/latest_upload", methods=["GET"])
+def latest_upload():
+    global latest_upload_payload
+    if not latest_upload_payload:
+        return jsonify({"success": False, "error": "尚未上傳任何檔案"}), 404
+    return jsonify({"success": True, **latest_upload_payload})
+
+@app.route("/contract_info")
+def get_contract_info():
+    """取得契約容量相關資訊"""
+    return jsonify({
+        'contract_capacity': CONTRACT_CAPACITY,
+        'description': f'契約容量為 {CONTRACT_CAPACITY} kWh/小時，表示每小時從電網購電量不能超過此限制'
+    })
+
 if __name__ == "__main__":
     # 啟動時載入資料和模型
     load_data()
     load_model()
-    app.run(host="0.0.0.0", port=5000, debug=True) 
+    app.run(host="0.0.0.0", port=5000, debug=False) 
